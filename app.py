@@ -104,28 +104,45 @@ def get_collections():
 
     return collections
 
-# --- MODEL, RENK VE SEZON TESPİTİ ---
+# --- MODEL, RENK VE SEZON TESPİTİ (GÜNCELLENMİŞ) ---
 COLORS_LIST = [
-    "SIYAH", "BEYAZ", "EKRU", "KREMA", "BEJ", "KAHVERENGI", "LACIVERT", "MAVI", 
-    "KIRMIZI", "YESIL", "HAKI", "BORDO", "PEMBE", "TURUNCU", "SARI", "GRI", "LILA", "ANTRASIT", "VIZON"
+    "SIYAH", "BEYAZ", "EKRU", "KREMA", "BEJ", "KAHVERENGI", "KAHVE", "LACIVERT", "MAVI", 
+    "KIRMIZI", "YESIL", "HAKI", "BORDO", "PEMBE", "TURUNCU", "ORANJ", "SARI", "GRI", 
+    "LILA", "ANTRASIT", "VIZON", "KIREMIT", "MINT", "INDIGO", "FUKSYA", "TEN", "CAMEL", "SOMON"
 ]
 
+GENERIC_CATEGORY_WORDS = {
+    "GOMLEK", "SORT", "TAKIM", "PANTOLON", "ELBISE", "ETEK", "CEKET", "BLUZ", "TOP", 
+    "TRIKO", "YELEK", "HIRKA", "KABAN", "MONT", "BODY", "TULUM", "KIMONO", "SWEATSHIRT"
+}
+
+def turkish_upper(text):
+    if not text:
+        return ""
+    return (str(text).replace("i", "İ").replace("ı", "I").upper()
+            .replace("İ", "I").replace("Ç", "C").replace("Ş", "S")
+            .replace("Ğ", "G").replace("Ü", "U").replace("Ö", "O"))
+
 def extract_color(title, tags):
-    full_text = (title + " " + " ".join(tags)).upper()
+    full_text = turkish_upper(str(title) + " " + " ".join([str(t) for t in tags]))
     for col in COLORS_LIST:
         if re.search(r'\b' + col + r'\b', full_text):
             return col
     return "DIGER"
 
 def extract_model_base(title):
-    clean = title.upper()
+    clean = turkish_upper(title)
     for c in COLORS_LIST:
         clean = re.sub(r'\b' + c + r'\b', '', clean)
-    parts = clean.split()
-    return " ".join(parts[:2]) if len(parts) >= 2 else clean
+    clean_alphanumeric = re.sub(r'[^A-Z0-9\s]', ' ', clean)
+    words = [w for w in clean_alphanumeric.split() if w not in GENERIC_CATEGORY_WORDS]
+    if words:
+        return words[0]
+    raw_words = clean_alphanumeric.split()
+    return raw_words[0] if raw_words else "GENEL"
 
 def detect_season(tags_list):
-    text = " ".join([str(t).upper() for t in tags_list])
+    text = turkish_upper(" ".join([str(t) for t in tags_list]))
     is_summer = any(k in text for k in ["SS", "YAZ", "SUMMER", "SPRING", "ILKBAHAR"])
     is_winter = any(k in text for k in ["FW", "AW", "KIS", "WINTER", "SONBAHAR", "FALL"])
     if is_summer and is_winter:
@@ -289,7 +306,7 @@ def get_collection_data_fast(collection_id):
     df_res["shopify_sales_score"] = df_res["product_id"].map(best_selling_order).fillna(20.0)
     return df_res
 
-# --- 3. GELİŞMİŞ 4'LÜ IZGARA MODEL/RENK AYRIŞTIRMA MOTORU ---
+# --- 3. GELİŞMİŞ 4'LÜ IZGARA MODEL/RENK AYRIŞTIRMA MOTORU (GÜNCELLENMİŞ) ---
 def diversify_grid_4(df_in, lookback=4):
     in_stock = df_in[df_in["total_stock"] > 0].to_dict("records")
     out_of_stock = df_in[df_in["total_stock"] <= 0].to_dict("records")
@@ -302,6 +319,7 @@ def diversify_grid_4(df_in, lookback=4):
         
         chosen_idx = None
         
+        # 1. Öncelik: Model son lookback kadar üründe kesinlikle olmasın VE Renk de çakışmasın
         for i, item in enumerate(in_stock):
             m_ok = item["model_base"] not in recent_models
             c_ok = (item["color"] == "DIGER") or (item["color"] not in recent_colors)
@@ -309,12 +327,14 @@ def diversify_grid_4(df_in, lookback=4):
                 chosen_idx = i
                 break
         
+        # 2. Öncelik: Renk çakışsa bile MODEL kesinlikle son lookback içinde olmasın
         if chosen_idx is None:
             for i, item in enumerate(in_stock):
                 if item["model_base"] not in recent_models:
                     chosen_idx = i
                     break
         
+        # 3. Öncelik: Lookback sağlanamıyorsa en azından bir önceki ürünle aynı model olmasın
         if chosen_idx is None and len(result) > 0:
             last_m = result[-1]["model_base"]
             for i, item in enumerate(in_stock):
@@ -322,6 +342,7 @@ def diversify_grid_4(df_in, lookback=4):
                     chosen_idx = i
                     break
                     
+        # 4. Hiçbiri tutmazsa (havuzda sadece tek bir model kaldıysa) ilk sıradakini al
         if chosen_idx is None:
             chosen_idx = 0
             
@@ -479,7 +500,6 @@ selected_col_label = st.sidebar.selectbox(
     help="Kutuya tıklayıp aradığınız koleksiyonun adını doğrudan klavyeden yazabilirsiniz."
 )
 
-# Canlı verileri yenile butonu doğrudan kutunun altında, her zaman görünür
 if st.sidebar.button("⚡ Canlı Verileri Yenile", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
