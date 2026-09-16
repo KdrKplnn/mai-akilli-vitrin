@@ -735,25 +735,22 @@ m5.metric("Tükenen (0 Stok)", len(df_sorted[df_sorted["total_stock"] <= 0]))
 
 st.divider()
 
-# ==================== GÖRSEL IZGARA (SORTMAX STİLİ SÜRÜKLE-BIRAK) ====================
+# ==================== GÖRSEL IZGARA (KOMPAKT & ÇOKLU SEÇİM) ====================
 st.subheader("🎨 Akıllı Görsel Vitrin (Sortmax Tarzı Sürükle-Bırak)")
-st.caption("💡 Ürün kartlarını fareyle tutup dilediğin sıraya sürükleyebilirsin. Sıralamayı tamamlayınca aşağıdaki 'Shopify'a Gönder' butonuyla tek tıkla canlıya alabilirsin.")
+st.caption("💡 **İpucu:** Birden fazla ürünü seçip birlikte taşımak için kutucuklarına tıklayın veya **Ctrl** tuşuna basılı tutarak birden fazla kart seçin, ardından tutup dilediğiniz yere bırakın.")
 
-# Arama ve Mod Seçimi
 c_srch, c_view = st.columns([3, 1])
 with c_srch:
     filter_q = st.text_input("🔍 Vitrinde Ürün / Model Ara:", placeholder="Örn: Aliza, Seyseller, Yeşil...")
 with c_view:
     view_mode = st.radio("Görünüm Modu:", ["🎨 Görsel Vitrin (Sürükle-Bırak)", "📋 Klasik Tablo"], horizontal=True)
 
-# Görsel kartlar için ürün verisini hazırla
 grid_df = df_sorted.copy()
 if filter_q:
     fq = filter_q.strip().lower()
     grid_df = grid_df[grid_df["title"].str.lower().str.contains(fq) | grid_df["sku"].str.lower().str.contains(fq)]
 
 if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
-    # SortableJS ile HTML bileşeni
     cards_data = []
     for idx, row in grid_df.iterrows():
         cards_data.append({
@@ -764,6 +761,7 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
             "stock": int(row["total_stock"]),
             "status": row["size_status"],
             "season": row["season"],
+            "discount": float(row["discount_pct"]),
             "order": int(row["Planlanan Sıra"])
         })
     
@@ -778,40 +776,45 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 margin: 0;
-                padding: 10px;
+                padding: 6px;
                 background: #f8fafc;
             }}
             .grid-container {{
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
-                gap: 16px;
-                padding: 10px;
+                gap: 10px;
+                padding: 6px;
             }}
             .product-card {{
                 background: #ffffff;
-                border: 1px solid #e2e8f0;
-                border-radius: 10px;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
                 overflow: hidden;
-                box-shadow: 0 2px 5px rgba(0,0,0,0.04);
+                box-shadow: 0 1px 3px rgba(0,0,0,0.06);
                 cursor: grab;
-                transition: transform 0.15s ease, box-shadow 0.15s ease;
+                transition: transform 0.1s ease, box-shadow 0.1s ease, border-color 0.15s ease;
                 display: flex;
                 flex-direction: column;
                 user-select: none;
+                position: relative;
             }}
             .product-card:active {{
                 cursor: grabbing;
-                transform: scale(1.02);
-                box-shadow: 0 8px 16px rgba(0,0,0,0.12);
+            }}
+            .product-card.sortable-selected {{
+                border: 2px solid #2563eb !important;
+                background: #eff6ff !important;
+                box-shadow: 0 4px 10px rgba(37,99,235,0.2) !important;
             }}
             .img-container {{
                 width: 100%;
-                height: 280px;
+                height: 155px;
                 background: #f1f5f9;
                 position: relative;
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                overflow: hidden;
             }}
             .img-container img {{
                 width: 100%;
@@ -820,43 +823,56 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
             }}
             .badge-order {{
                 position: absolute;
-                top: 8px;
-                left: 8px;
-                background: rgba(15, 23, 42, 0.85);
+                top: 5px;
+                left: 5px;
+                background: rgba(15, 23, 42, 0.88);
                 color: #ffffff;
-                font-size: 11px;
+                font-size: 10px;
                 font-weight: 700;
-                padding: 3px 8px;
-                border-radius: 6px;
+                padding: 2px 6px;
+                border-radius: 4px;
+                z-index: 2;
+            }}
+            .badge-discount {{
+                position: absolute;
+                top: 5px;
+                right: 5px;
+                background: #e11d48;
+                color: #ffffff;
+                font-size: 10px;
+                font-weight: 700;
+                padding: 2px 6px;
+                border-radius: 4px;
+                z-index: 2;
             }}
             .card-details {{
-                padding: 10px;
+                padding: 6px 8px;
                 display: flex;
                 flex-direction: column;
-                gap: 4px;
+                gap: 3px;
+                background: #ffffff;
             }}
             .product-title {{
-                font-size: 12px;
+                font-size: 11px;
                 font-weight: 600;
                 color: #1e293b;
-                line-height: 1.25;
-                height: 30px;
+                line-height: 1.2;
+                white-space: nowrap;
                 overflow: hidden;
-                display: -webkit-box;
-                -webkit-line-clamp: 2;
-                -webkit-box-orient: vertical;
+                text-overflow: ellipsis;
             }}
             .tags-row {{
                 display: flex;
                 flex-wrap: wrap;
-                gap: 4px;
-                margin-top: 4px;
+                gap: 3px;
+                align-items: center;
             }}
             .tag {{
-                font-size: 10px;
+                font-size: 9px;
                 font-weight: 600;
-                padding: 2px 6px;
-                border-radius: 4px;
+                padding: 1px 5px;
+                border-radius: 3px;
+                line-height: 1.2;
             }}
             .tag-stock {{ background: #dcfce7; color: #166534; }}
             .tag-color {{ background: #f1f5f9; color: #475569; }}
@@ -880,15 +896,18 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
                 if(p.status === 'Kırık Beden' || p.status === 'Tek Beden') statusClass = 'tag-status-kirik';
                 if(p.status === 'Tükendi') statusClass = 'tag-status-tukendi';
                 
+                let discountBadge = p.discount > 0 ? `<span class="badge-discount">%${{p.discount}}</span>` : '';
+                
                 card.innerHTML = `
                     <div class="img-container">
                         <span class="badge-order">#${{idx + 1}}</span>
-                        ${{p.image ? `<img src="${{p.image}}" />` : '<span style="color:#94a3b8;font-size:12px;">Görsel Yok</span>'}}
+                        ${{discountBadge}}
+                        ${{p.image ? `<img src="${{p.image}}" />` : '<span style="color:#94a3b8;font-size:11px;">Görsel Yok</span>'}}
                     </div>
                     <div class="card-details">
-                        <div class="product-title">${{p.title}}</div>
+                        <div class="product-title" title="${{p.title}}">${{p.title}}</div>
                         <div class="tags-row">
-                            <span class="tag tag-stock">📦 ${{p.stock}} Adet</span>
+                            <span class="tag tag-stock">📦 ${{p.stock}}</span>
                             <span class="tag tag-color">🎨 ${{p.color}}</span>
                             <span class="tag ${{statusClass}}">${{p.status}}</span>
                         </div>
@@ -898,6 +917,9 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
             }});
             
             new Sortable(grid, {{
+                multiDrag: true,
+                selectedClass: 'sortable-selected',
+                fallbackTolerance: 3,
                 animation: 150,
                 ghostClass: 'sortable-ghost',
                 onEnd: function() {{
@@ -913,12 +935,12 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
     </html>
     """
     
-    # 4'lü kartların akıcı görüntülenebileceği dinamik yükseklik
-    estimated_height = max(600, (len(cards_data) // 4 + 1) * 380)
+    # Kompakt 155px yükseklik sayesinde daha fazla satır ekrana sığar
+    estimated_height = max(500, (len(cards_data) // 4 + 1) * 220)
     components.html(html_code, height=min(estimated_height, 1200), scrolling=True)
 
 else:
-    # 📋 Klasik Tablo Modu (Hızlı İnceleme İçin)
+    # 📋 Klasik Tablo Modu
     display_cols = [
         "Planlanan Sıra", "image", "Mevcut Sıra", "title", "sku", "color", "season", 
         "total_stock", "active_sizes", "size_status", "discount_pct", "days_old", "price"
@@ -961,4 +983,4 @@ with col_btn:
                 st.error("Sıralama aktarılırken bir hata oluştu.")
 
 with col_info:
-    st.info("💡 Butona bastığında mağazadaki koleksiyon vitrini buradaki 'Planlanan Sıra' numarasına göre birebir canlıya alınır.")
+    st.info("💡 Butona bastığında mağazadaki koleksiyon vitrini buradaki sıralamaya göre anında Shopify'da güncellenir.")
