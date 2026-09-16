@@ -503,10 +503,10 @@ selected_col_label = st.sidebar.selectbox(
     help="Kutuya tıklayıp aradığınız koleksiyonun adını doğrudan klavyeden yazabilirsiniz."
 )
 
+# Canlı verileri ve oturum geçmişini tertemiz yapan akıllı buton
 if st.sidebar.button("⚡ Canlı Verileri Yenile", use_container_width=True):
     st.cache_data.clear()
-    # Oturumdaki tüm eski koleksiyon çalışma listelerini temizle
-    keys_to_clear = [k for k in st.session_state.keys() if k.startswith("working_") or k.startswith("orig_") or k.startswith("filters_hash_")]
+    keys_to_clear = [k for k in list(st.session_state.keys()) if k.startswith("working_") or k.startswith("orig_") or k.startswith("filters_hash_")]
     for k in keys_to_clear:
         del st.session_state[k]
     st.rerun()
@@ -528,10 +528,12 @@ if df_raw.empty:
 session_key = f"orig_{selected_col_id}"
 working_key = f"working_{selected_col_id}"
 
-if session_key not in st.session_state:
+# Koleksiyon ürün adedi değişmişse (ürün silindiğinde/eklendiğinde) otomatik hafızayı yenile
+if (session_key not in st.session_state) or (len(st.session_state[session_key]) != len(df_raw)):
     df_backup = df_raw.copy()
     df_backup["Mevcut Sıra"] = df_backup.index + 1
     st.session_state[session_key] = df_backup
+    st.session_state[working_key] = df_backup.copy()
 
 st.sidebar.divider()
 
@@ -667,11 +669,7 @@ any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
 current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{f_recent_stock}_{f_season}_{selected_priority_seasons}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
-# ÇALIŞMA LİSTESİ BELİRLEME
-if working_key not in st.session_state:
-    st.session_state[working_key] = st.session_state[session_key].copy()
-    st.session_state[last_filters_key] = current_filters_hash
-
+# Sadece kullanıcı sol filtrelerden birini değiştirdiğinde otomatik yeniden sırala
 if st.session_state.get(last_filters_key) != current_filters_hash:
     st.session_state[last_filters_key] = current_filters_hash
     
@@ -750,7 +748,7 @@ m5.metric("Tükenen (0 Stok)", len(df_sorted[df_sorted["total_stock"] <= 0]))
 
 st.divider()
 
-# ==================== GÖRSEL IZGARA & MANUEL TAŞIMA ====================
+# ==================== GÖRSEL IZGARA & HIZLI MANUEL TAŞIMA ====================
 st.subheader("🎨 Akıllı Görsel Vitrin (Sortmax Modeli)")
 
 c_srch, c_view = st.columns([3, 1])
@@ -802,22 +800,28 @@ with t_c3:
         else:
             st.warning("Lütfen taşınacak en az bir ürün seçin.")
 
-# ==================== 🧲 SÜRÜKLE-BIRAK DEĞİŞİKLİKLERİNİ KAYDETME KÖPRÜSÜ ====================
-with st.expander("💾 Sürükle-Bırak ile Yaptığım Değişiklikleri Kalıcı Kaydet", expanded=False):
-    st.caption("Aşağıdaki kartları fareyle sürükleyerek yerlerini değiştirdiyseniz, bu sırayı Shopify'a göndermeden önce hafızaya mühürlemek için butona basın:")
-    sync_order_json = st.text_area("Sürüklenen Sıra Verisi (Otomatik Kopyalanır):", key="dragged_ids_area", height=68, placeholder="Aşağıdan kartları sürüklediğinizde bu kutu otomatik dolar...")
-    if st.button("📥 Sürüklenen Görsel Sırayı Kesinleştir & Listeye Kaydet", use_container_width=True):
-        if sync_order_json:
-            try:
-                new_ordered_ids = json.loads(sync_order_json)
-                curr = st.session_state[working_key].copy()
-                id_map = {pid: idx for idx, pid in enumerate(new_ordered_ids)}
-                curr["sort_temp"] = curr["product_id"].map(id_map).fillna(999999)
-                st.session_state[working_key] = curr.sort_values(by="sort_temp").drop(columns=["sort_temp"]).reset_index(drop=True)
-                st.success("🎉 Sürüklediğiniz vitrin sırası başarıyla kaydedildi!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Sıra işlenirken hata: {e}")
+# ==================== 🧲 SÜRÜKLE-BIRAK KÖPRÜSÜ (KESİNLEŞTİRME PANELİ) ====================
+with st.expander("💾 Sürükle-Bırak İle Yaptığım Sırayı Kesinleştir & Tabloya Kaydet", expanded=True):
+    st.caption("Aşağıdaki kartları fareyle sürükleyip yerlerini değiştirdikten sonra, kartların hemen altındaki kutudan kopyalanan sırayı buraya yapıştırıp kaydedin. Böylece hem klasik tablo hem de Shopify canlı sırası anında eşitlenir:")
+    s_col1, s_col2 = st.columns([3.5, 1.2])
+    with s_col1:
+        sync_order_json = st.text_input("Sürüklenen Sıra Verisi:", placeholder="Kartları sürüklediğinizde alt kısımda çıkan metni buraya yapıştırın...", label_visibility="collapsed")
+    with s_col2:
+        if st.button("💾 Yeni Sırayı Tabloya Kaydet", type="primary", use_container_width=True):
+            if sync_order_json:
+                try:
+                    new_ordered_ids = json.loads(sync_order_json)
+                    curr = st.session_state[working_key].copy()
+                    id_map = {pid: idx for idx, pid in enumerate(new_ordered_ids)}
+                    curr["sort_temp"] = curr["product_id"].map(id_map).fillna(999999)
+                    new_df_saved = curr.sort_values(by="sort_temp").drop(columns=["sort_temp"]).reset_index(drop=True)
+                    st.session_state[working_key] = new_df_saved
+                    st.success("🎉 Harika! Sürüklediğiniz sıra hem görsel vitrine hem klasik tabloya mühürlendi!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Sıralama verisi çözülemedi: {e}")
+            else:
+                st.warning("Lütfen önce aşağıdaki sürükleme kutusundaki veriyi yapıştırın.")
 
 st.caption("💡 **Sortmax Tarzı Kullanım:** Kartları fareyle istediğiniz yere sürükleyin. Sürükleme bittiğinde sol üstteki numaralar `#1, #2, #3...` diye anında güncellenir.")
 
@@ -953,13 +957,49 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
             .tag-status-tam {{ background: #e0f2fe; color: #0369a1; }}
             .tag-status-kirik {{ background: #fef3c7; color: #b45309; }}
             .tag-status-tukendi {{ background: #fee2e2; color: #b91c1c; }}
+            .sync-panel {{
+                margin-top: 15px;
+                padding: 10px;
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }}
+            .sync-input {{
+                flex: 1;
+                font-size: 11px;
+                padding: 6px 8px;
+                border: 1px solid #94a3b8;
+                border-radius: 4px;
+                background: #f8fafc;
+            }}
+            .sync-btn {{
+                background: #2563eb;
+                color: #fff;
+                font-weight: 600;
+                font-size: 11px;
+                padding: 6px 12px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }}
         </style>
     </head>
     <body>
         <div id="productGrid" class="grid-container"></div>
+        
+        <div class="sync-panel">
+            <span style="font-size:11px; font-weight:700; color:#334155;">📋 Sürüklenen Yeni Sıra:</span>
+            <input type="text" id="syncBox" class="sync-input" readonly placeholder="Kartları sürüklediğinizde bu kutu otomatik dolar..." />
+            <button class="sync-btn" onclick="copyAndAlert()">📋 Sırayı Kopyala</button>
+        </div>
+
         <script>
             const data = {cards_json};
             const grid = document.getElementById('productGrid');
+            const syncBox = document.getElementById('syncBox');
             
             data.forEach((p) => {{
                 const card = document.createElement('div');
@@ -990,7 +1030,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 grid.appendChild(card);
             }});
             
-            function updateOrderAndSync() {{
+            function updateOrder() {{
                 const cards = Array.from(grid.getElementsByClassName('product-card'));
                 const orderedIds = [];
                 cards.forEach((c, i) => {{
@@ -998,15 +1038,17 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                     if (badge) badge.innerText = '#' + (i + 1);
                     orderedIds.push(c.dataset.id);
                 }});
-                
-                // Üstteki Streamlit Textarea kutusunu anında doldur
-                try {{
-                    const parentTextarea = window.parent.document.querySelector('textarea[aria-label="Sürüklenen Sıra Verisi (Otomatik Kopyalanır):"]');
-                    if (parentTextarea) {{
-                        parentTextarea.value = JSON.stringify(orderedIds);
-                        parentTextarea.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    }}
-                }} catch(e) {{}}
+                syncBox.value = JSON.stringify(orderedIds);
+            }}
+
+            function copyAndAlert() {{
+                if(!syncBox.value) {{
+                    alert('Lütfen önce en az bir kartı sürükleyerek yerini değiştirin.');
+                    return;
+                }}
+                navigator.clipboard.writeText(syncBox.value).then(() => {{
+                    alert('✅ Yeni sıra kopyalandı! Şimdi yukarıdaki "Yeni Sırayı Tabloya Kaydet" kutusuna yapıştırıp butona basın.');
+                }});
             }}
 
             new Sortable(grid, {{
@@ -1017,7 +1059,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 animation: 120,
                 ghostClass: 'sortable-ghost',
                 onEnd: function() {{
-                    updateOrderAndSync();
+                    updateOrder();
                 }}
             }});
         </script>
@@ -1025,8 +1067,8 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     </html>
     """
     
-    estimated_height = max(500, (len(cards_data) // 4 + 1) * 175)
-    components.html(html_code, height=min(estimated_height, 1200), scrolling=True)
+    estimated_height = max(550, (len(cards_data) // 4 + 1) * 180)
+    components.html(html_code, height=min(estimated_height, 1300), scrolling=True)
 
 else:
     # 📋 Klasik Tablo Modu
