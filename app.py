@@ -668,7 +668,6 @@ if working_key not in st.session_state:
     st.session_state[working_key] = st.session_state[session_key].copy()
     st.session_state[last_filters_key] = current_filters_hash
 
-# Sadece kullanıcı sol filtrelerden birini değiştirdiğinde otomatik yeniden sırala
 if st.session_state.get(last_filters_key) != current_filters_hash:
     st.session_state[last_filters_key] = current_filters_hash
     
@@ -716,7 +715,7 @@ if st.session_state.get(last_filters_key) != current_filters_hash:
 
     st.session_state[working_key] = df_sorted
 
-# Mevcut çalışma listesini al ve planlanan sırayı güncelle
+# Planlanan sırayı güncelle
 df_sorted = st.session_state[working_key].copy().reset_index(drop=True)
 df_sorted["Planlanan Sıra"] = df_sorted.index + 1
 
@@ -750,10 +749,9 @@ st.divider()
 # ==================== GÖRSEL IZGARA & HIZLI MANUEL TAŞIMA ====================
 st.subheader("🎨 Akıllı Görsel Vitrin (Sortmax Modeli)")
 
-# Arama ve Mod Seçimi
 c_srch, c_view = st.columns([3, 1])
 with c_srch:
-    filter_q = st.text_input("🔍 Vitrinde Ürün / Model Ara (Örn: Aliza, Seyseller, Takım):", placeholder="Model veya renk aratıp gerçek vitrin sırasını görebilirsiniz...")
+    filter_q = st.text_input("🔍 Vitrinde Ürün / Model Ara (Örn: Aliza, Seyseller):", placeholder="Model veya renk aratıp gerçek vitrin sırasını görebilirsiniz...")
 with c_view:
     view_mode = st.radio("Görünüm Modu:", ["🎨 Görsel Vitrin (Sortmax)", "📋 Klasik Tablo"], horizontal=True)
 
@@ -764,44 +762,37 @@ if filter_q:
     grid_df = grid_df[grid_df["title"].str.lower().str.contains(fq) | grid_df["sku"].str.lower().str.contains(fq)]
 
 # ==================== 🚀 HIZLI SIRA DEĞİŞTİRME PANELİ ====================
-with st.container():
-    t_c1, t_c2, t_c3 = st.columns([3, 1, 1.2])
-    with t_c1:
-        # Seçeneklerde gerçek vitrin sırası ve adı net görünsün
-        search_options = [f"#{r['Planlanan Sıra']} - {r['title']} ({r['color']})" for _, r in grid_df.iterrows()]
-        selected_move_items = st.multiselect(
-            "📌 Taşınacak Ürün(ler)i Seçin (Birden fazla seçilebilir):",
-            options=search_options,
-            default=[search_options[0]] if (search_options and filter_q) else []
-        )
-    with t_c2:
-        new_target_pos = st.number_input("Hedef Sıra No:", min_value=1, max_value=len(df_sorted), value=1)
-    with t_c3:
-        st.write("")
-        st.write("")
-        if st.button("🚀 Hedef Sıraya Taşı", type="primary", use_container_width=True):
-            if selected_move_items:
-                # Seçilen ürünlerin gerçek sıra numaralarını yakala
-                ranks_to_move = [int(item.split(" - ")[0].replace("#", "")) for item in selected_move_items]
-                curr = df_sorted.copy()
-                
-                # Seçilenleri ve kalanları ayır
-                chosen_rows = curr[curr["Planlanan Sıra"].isin(ranks_to_move)]
-                remaining_rows = curr[~curr["Planlanan Sıra"].isin(ranks_to_move)]
-                
-                # İstenen hedef sıraya yerleştir (aradaki diğer ürünler otomatik 1 kayar)
-                insert_idx = max(0, min(new_target_pos - 1, len(remaining_rows)))
-                new_full_df = pd.concat([
-                    remaining_rows.iloc[:insert_idx],
-                    chosen_rows,
-                    remaining_rows.iloc[insert_idx:]
-                ]).reset_index(drop=True)
-                
-                # Yeni sırayı kesin olarak oturuma kaydet
-                st.session_state[working_key] = new_full_df
-                st.rerun()
+t_c1, t_c2, t_c3 = st.columns([3, 1, 1.2])
+with t_c1:
+    search_options = [f"#{r['Planlanan Sıra']} - {r['title']} ({r['color']})" for _, r in grid_df.iterrows()]
+    selected_move_items = st.multiselect(
+        "📌 Taşınacak Ürün(ler)i Seçin (Birden fazla seçilebilir):",
+        options=search_options,
+        default=[]
+    )
+with t_c2:
+    new_target_pos = st.number_input("Hedef Sıra No:", min_value=1, max_value=len(df_sorted), value=1)
+with t_c3:
+    st.write("")
+    st.write("")
+    if st.button("🚀 Hedef Sıraya Taşı", type="primary", use_container_width=True):
+        if selected_move_items:
+            ranks_to_move = [int(item.split(" - ")[0].replace("#", "")) for item in selected_move_items]
+            curr = df_sorted.copy()
+            chosen_rows = curr[curr["Planlanan Sıra"].isin(ranks_to_move)]
+            remaining_rows = curr[~curr["Planlanan Sıra"].isin(ranks_to_move)]
+            
+            insert_idx = max(0, min(new_target_pos - 1, len(remaining_rows)))
+            new_full_df = pd.concat([
+                remaining_rows.iloc[:insert_idx],
+                chosen_rows,
+                remaining_rows.iloc[insert_idx:]
+            ]).reset_index(drop=True)
+            
+            st.session_state[working_key] = new_full_df
+            st.rerun()
 
-st.caption("💡 **Nasıl Çalışır?:** Ürünü aratıp yukarıdan seçtikten sonra hedef sıra numarasını girip butona bastığınızda doğrudan o sıraya gider, diğer tüm ürünler bozulmadan otomatik olarak birer basamak kayar.")
+st.caption("💡 **İpucu:** Kutudan ürün seçip hedef sıra numarasını girerek tek tuşla taşıyabilir veya aşağıdaki kartların sol üstündeki **# kutucuğuna** doğrudan hedef sırayı yazıp **Enter**'a basabilirsiniz.")
 
 if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     cards_data = []
@@ -815,12 +806,13 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
             "status": row["size_status"],
             "season": row["season"],
             "discount": float(row["discount_pct"]),
-            "actual_rank": int(row["Planlanan Sıra"])  # Gerçek vitrin sırası
+            "actual_rank": int(row["Planlanan Sıra"])
         })
     
     cards_json = json.dumps(cards_data)
     
-    html_code = f"""
+    # HTML Bileşeninde Çift Yönlü İletişim (Streamlit Component Value)
+    component_code = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -854,6 +846,11 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
             .product-card:active {{
                 cursor: grabbing;
             }}
+            .product-card.sortable-selected {{
+                border: 2px solid #2563eb !important;
+                background: #eff6ff !important;
+                box-shadow: 0 2px 8px rgba(37,99,235,0.25) !important;
+            }}
             .img-container {{
                 width: 100%;
                 height: 125px;
@@ -870,18 +867,26 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 object-fit: cover;
                 object-position: center top;
             }}
-            .badge-order {{
+            .badge-order-input {{
                 position: absolute;
                 top: 4px;
                 left: 4px;
-                background: rgba(15, 23, 42, 0.9);
+                background: rgba(15, 23, 42, 0.92);
                 color: #ffffff;
                 font-size: 10px;
                 font-weight: 700;
-                padding: 2px 6px;
+                padding: 2px 4px;
                 border-radius: 4px;
-                z-index: 2;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+                border: 1px solid rgba(255,255,255,0.4);
+                width: 44px;
+                text-align: center;
+                cursor: text;
+                z-index: 5;
+            }}
+            .badge-order-input:focus {{
+                background: #ffffff;
+                color: #0f172a;
+                outline: 2px solid #2563eb;
             }}
             .badge-discount {{
                 position: absolute;
@@ -935,6 +940,15 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     <body>
         <div id="productGrid" class="grid-container"></div>
         <script>
+            // Streamlit haberleşme köprüsü
+            function sendToStreamlit(data) {{
+                window.parent.postMessage({{
+                    isStreamlitMessage: true,
+                    type: "streamlit:setComponentValue",
+                    value: data
+                }}, "*");
+            }}
+
             const data = {cards_json};
             const grid = document.getElementById('productGrid');
             
@@ -942,6 +956,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 const card = document.createElement('div');
                 card.className = 'product-card';
                 card.dataset.id = p.id;
+                card.dataset.rank = p.actual_rank;
                 
                 let statusClass = 'tag-status-tam';
                 if(p.status === 'Kırık Beden' || p.status === 'Tek Beden') statusClass = 'tag-status-kirik';
@@ -951,7 +966,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 
                 card.innerHTML = `
                     <div class="img-container">
-                        <span class="badge-order">#${{p.actual_rank}}</span>
+                        <input type="text" class="badge-order-input" value="#${{p.actual_rank}}" title="Yeni sırayı yazıp Enter'a basın" onclick="event.stopPropagation();" />
                         ${{discountBadge}}
                         ${{p.image ? `<img src="${{p.image}}" loading="lazy" />` : '<span style="color:#94a3b8;font-size:10px;">Görsel Yok</span>'}}
                     </div>
@@ -964,20 +979,43 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                         </div>
                     </div>
                 `;
+                
+                // Input içinden Enter'a basınca sırayı değiştir
+                const inp = card.querySelector('.badge-order-input');
+                inp.addEventListener('keydown', function(e) {{
+                    if (e.key === 'Enter') {{
+                        let val = inp.value.replace('#', '').trim();
+                        let num = parseInt(val);
+                        if (!isNaN(num) && num > 0) {{
+                            sendToStreamlit({{ action: "direct_move", pid: p.id, target: num }});
+                        }}
+                    }}
+                }});
+                
                 grid.appendChild(card);
             }});
             
+            // Sürükle Bırak ve MultiDrag (Ctrl ile çoklu seçim)
             new Sortable(grid, {{
+                multiDrag: true,
+                selectedClass: 'sortable-selected',
+                fallbackTolerance: 3,
                 animation: 120,
-                ghostClass: 'sortable-ghost'
+                ghostClass: 'sortable-ghost',
+                onEnd: function(evt) {{
+                    const cards = Array.from(grid.getElementsByClassName('product-card'));
+                    const orderedIds = cards.map(c => c.dataset.id);
+                    sendToStreamlit({{ action: "drag_reorder", ordered_ids: orderedIds }});
+                }}
             }});
         </script>
     </body>
     </html>
     """
     
+    # Özel bileşeni çalıştır ve JavaScript'ten gelen veriyi yakala
     estimated_height = max(500, (len(cards_data) // 4 + 1) * 175)
-    components.html(html_code, height=min(estimated_height, 1200), scrolling=True)
+    component_val = components.html(component_code, height=min(estimated_height, 1200), scrolling=True)
 
 else:
     # 📋 Klasik Tablo Modu
