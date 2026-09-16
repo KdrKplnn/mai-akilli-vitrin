@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 import time
 import re
+import json
+import streamlit.components.v1 as components
 
 # --- SAYFA YAPILANDIRMASI ---
 st.set_page_config(
@@ -11,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- GÖRSELLERİN NET VE ANLAŞILIR GÖRÜNMESİ İÇİN CSS ---
+# --- GÖRSEL VE KART STİLLERİ ---
 st.markdown("""
 <style>
     [data-testid="stDataFrame"] img {
@@ -95,7 +97,6 @@ def get_collections():
                     "title": node.get("title"),
                     "count": count_val
                 })
-            
             page_info = data.get("pageInfo", {})
             has_next_page = page_info.get("hasNextPage", False)
             cursor = page_info.get("endCursor")
@@ -104,7 +105,7 @@ def get_collections():
 
     return collections
 
-# --- MODEL, RENK VE SEZON TESPİTİ (GÜNCELLENMİŞ) ---
+# --- MODEL, RENK VE SEZON TESPİTİ ---
 COLORS_LIST = [
     "SIYAH", "BEYAZ", "EKRU", "KREMA", "BEJ", "KAHVERENGI", "KAHVE", "LACIVERT", "MAVI", 
     "KIRMIZI", "YESIL", "HAKI", "BORDO", "PEMBE", "TURUNCU", "ORANJ", "SARI", "GRI", 
@@ -306,7 +307,7 @@ def get_collection_data_fast(collection_id):
     df_res["shopify_sales_score"] = df_res["product_id"].map(best_selling_order).fillna(20.0)
     return df_res
 
-# --- 3. GELİŞMİŞ 4'LÜ IZGARA MODEL/RENK AYRIŞTIRMA MOTORU (GÜNCELLENMİŞ) ---
+# --- 3. GELİŞMİŞ 4'LÜ IZGARA MODEL/RENK AYRIŞTIRMA MOTORU ---
 def diversify_grid_4(df_in, lookback=4):
     in_stock = df_in[df_in["total_stock"] > 0].to_dict("records")
     out_of_stock = df_in[df_in["total_stock"] <= 0].to_dict("records")
@@ -319,7 +320,6 @@ def diversify_grid_4(df_in, lookback=4):
         
         chosen_idx = None
         
-        # 1. Öncelik: Model son lookback kadar üründe kesinlikle olmasın VE Renk de çakışmasın
         for i, item in enumerate(in_stock):
             m_ok = item["model_base"] not in recent_models
             c_ok = (item["color"] == "DIGER") or (item["color"] not in recent_colors)
@@ -327,14 +327,12 @@ def diversify_grid_4(df_in, lookback=4):
                 chosen_idx = i
                 break
         
-        # 2. Öncelik: Renk çakışsa bile MODEL kesinlikle son lookback içinde olmasın
         if chosen_idx is None:
             for i, item in enumerate(in_stock):
                 if item["model_base"] not in recent_models:
                     chosen_idx = i
                     break
         
-        # 3. Öncelik: Lookback sağlanamıyorsa en azından bir önceki ürünle aynı model olmasın
         if chosen_idx is None and len(result) > 0:
             last_m = result[-1]["model_base"]
             for i, item in enumerate(in_stock):
@@ -342,7 +340,6 @@ def diversify_grid_4(df_in, lookback=4):
                     chosen_idx = i
                     break
                     
-        # 4. Hiçbiri tutmazsa (havuzda sadece tek bir model kaldıysa) ilk sıradakini al
         if chosen_idx is None:
             chosen_idx = 0
             
@@ -657,7 +654,6 @@ other_active_rules = any([
 ])
 
 any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
-
 current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{f_recent_stock}_{f_season}_{selected_priority_seasons}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
@@ -728,7 +724,7 @@ if enable_clustering_fix: active_badges.append("🎨 4'lü Izgara Ayrıştırma"
 if active_badges:
     st.success(f"⚡ **Aktif Filtreler:** {' + '.join(active_badges)}")
 else:
-    st.info("👁️ **Mevcut Canlı Vitrin:** Şu an Shopify'da müşterilerin gördüğü birebir sıra listeleniyor. Soldan filtreleri açarak vitrini düzenleyebilirsiniz.")
+    st.info("👁️ **Mevcut Canlı Vitrin:** Şu an Shopify'da müşterilerin gördüğü birebir sıra listeleniyor.")
 
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Toplam Ürün", len(df_sorted))
@@ -739,127 +735,216 @@ m5.metric("Tükenen (0 Stok)", len(df_sorted[df_sorted["total_stock"] <= 0]))
 
 st.divider()
 
-# ==================== TABLODAN ARAMA VE SIRALAMA LİSTESİ ====================
-st.subheader("📋 Sıralama Tablosu & Hızlı Manuel Kontrol")
+# ==================== GÖRSEL IZGARA (SORTMAX STİLİ SÜRÜKLE-BIRAK) ====================
+st.subheader("🎨 Akıllı Görsel Vitrin (Sortmax Tarzı Sürükle-Bırak)")
+st.caption("💡 Ürün kartlarını fareyle tutup dilediğin sıraya sürükleyebilirsin. Sıralamayı tamamlayınca aşağıdaki 'Shopify'a Gönder' butonuyla tek tıkla canlıya alabilirsin.")
 
-search_col, count_col = st.columns([3, 1])
-with search_col:
-    table_search_query = st.text_input("🔍 Tabloda Ürün Adı veya SKU Ara:", placeholder="Ürün adı veya kodu yazarak anında bulun...")
+# Arama ve Mod Seçimi
+c_srch, c_view = st.columns([3, 1])
+with c_srch:
+    filter_q = st.text_input("🔍 Vitrinde Ürün / Model Ara:", placeholder="Örn: Aliza, Seyseller, Yeşil...")
+with c_view:
+    view_mode = st.radio("Görünüm Modu:", ["🎨 Görsel Vitrin (Sürükle-Bırak)", "📋 Klasik Tablo"], horizontal=True)
 
-if table_search_query:
-    query_str = table_search_query.strip().lower()
-    view_df = df_sorted[df_sorted["title"].str.lower().str.contains(query_str) | df_sorted["sku"].str.lower().str.contains(query_str)].copy()
+# Görsel kartlar için ürün verisini hazırla
+grid_df = df_sorted.copy()
+if filter_q:
+    fq = filter_q.strip().lower()
+    grid_df = grid_df[grid_df["title"].str.lower().str.contains(fq) | grid_df["sku"].str.lower().str.contains(fq)]
+
+if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
+    # SortableJS ile HTML bileşeni
+    cards_data = []
+    for idx, row in grid_df.iterrows():
+        cards_data.append({
+            "id": row["product_id"],
+            "title": row["title"],
+            "image": row["image"] if row["image"] else "",
+            "color": row["color"],
+            "stock": int(row["total_stock"]),
+            "status": row["size_status"],
+            "season": row["season"],
+            "order": int(row["Planlanan Sıra"])
+        })
+    
+    cards_json = json.dumps(cards_data)
+    
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                margin: 0;
+                padding: 10px;
+                background: #f8fafc;
+            }}
+            .grid-container {{
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 16px;
+                padding: 10px;
+            }}
+            .product-card {{
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                overflow: hidden;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.04);
+                cursor: grab;
+                transition: transform 0.15s ease, box-shadow 0.15s ease;
+                display: flex;
+                flex-direction: column;
+                user-select: none;
+            }}
+            .product-card:active {{
+                cursor: grabbing;
+                transform: scale(1.02);
+                box-shadow: 0 8px 16px rgba(0,0,0,0.12);
+            }}
+            .img-container {{
+                width: 100%;
+                height: 280px;
+                background: #f1f5f9;
+                position: relative;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+            .img-container img {{
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }}
+            .badge-order {{
+                position: absolute;
+                top: 8px;
+                left: 8px;
+                background: rgba(15, 23, 42, 0.85);
+                color: #ffffff;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 3px 8px;
+                border-radius: 6px;
+            }}
+            .card-details {{
+                padding: 10px;
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+            }}
+            .product-title {{
+                font-size: 12px;
+                font-weight: 600;
+                color: #1e293b;
+                line-height: 1.25;
+                height: 30px;
+                overflow: hidden;
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+            }}
+            .tags-row {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 4px;
+                margin-top: 4px;
+            }}
+            .tag {{
+                font-size: 10px;
+                font-weight: 600;
+                padding: 2px 6px;
+                border-radius: 4px;
+            }}
+            .tag-stock {{ background: #dcfce7; color: #166534; }}
+            .tag-color {{ background: #f1f5f9; color: #475569; }}
+            .tag-status-tam {{ background: #e0f2fe; color: #0369a1; }}
+            .tag-status-kirik {{ background: #fef3c7; color: #b45309; }}
+            .tag-status-tukendi {{ background: #fee2e2; color: #b91c1c; }}
+        </style>
+    </head>
+    <body>
+        <div id="productGrid" class="grid-container"></div>
+        <script>
+            const data = {cards_json};
+            const grid = document.getElementById('productGrid');
+            
+            data.forEach((p, idx) => {{
+                const card = document.createElement('div');
+                card.className = 'product-card';
+                card.dataset.id = p.id;
+                
+                let statusClass = 'tag-status-tam';
+                if(p.status === 'Kırık Beden' || p.status === 'Tek Beden') statusClass = 'tag-status-kirik';
+                if(p.status === 'Tükendi') statusClass = 'tag-status-tukendi';
+                
+                card.innerHTML = `
+                    <div class="img-container">
+                        <span class="badge-order">#${{idx + 1}}</span>
+                        ${{p.image ? `<img src="${{p.image}}" />` : '<span style="color:#94a3b8;font-size:12px;">Görsel Yok</span>'}}
+                    </div>
+                    <div class="card-details">
+                        <div class="product-title">${{p.title}}</div>
+                        <div class="tags-row">
+                            <span class="tag tag-stock">📦 ${{p.stock}} Adet</span>
+                            <span class="tag tag-color">🎨 ${{p.color}}</span>
+                            <span class="tag ${{statusClass}}">${{p.status}}</span>
+                        </div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            }});
+            
+            new Sortable(grid, {{
+                animation: 150,
+                ghostClass: 'sortable-ghost',
+                onEnd: function() {{
+                    const cards = Array.from(grid.getElementsByClassName('product-card'));
+                    cards.forEach((c, i) => {{
+                        const badge = c.querySelector('.badge-order');
+                        if(badge) badge.innerText = '#' + (i + 1);
+                    }});
+                }}
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    
+    # 4'lü kartların akıcı görüntülenebileceği dinamik yükseklik
+    estimated_height = max(600, (len(cards_data) // 4 + 1) * 380)
+    components.html(html_code, height=min(estimated_height, 1200), scrolling=True)
+
 else:
-    view_df = df_sorted.copy()
-
-with count_col:
-    st.write("")
-    st.caption(f"Gösterilen: **{len(view_df)}** / Toplam: **{len(df_sorted)}**")
-
-display_cols = [
-    "Planlanan Sıra", "image", "Mevcut Sıra", "title", "sku", "color", "season", 
-    "total_stock", "active_sizes", "size_status", "discount_pct", "days_old", "price"
-]
-
-selected_data = st.dataframe(
-    view_df[display_cols],
-    use_container_width=True,
-    height=420,
-    column_config={
-        "image": st.column_config.ImageColumn("Görsel", width="small"),
-        "Planlanan Sıra": st.column_config.NumberColumn("Planlanan", width="small"),
-        "Mevcut Sıra": st.column_config.NumberColumn("Mevcut", width="small"),
-        "title": st.column_config.TextColumn("Ürün Adı", width="large"),
-        "sku": st.column_config.TextColumn("SKU"),
-        "color": st.column_config.TextColumn("Renk"),
-        "season": st.column_config.TextColumn("Sezon"),
-        "total_stock": st.column_config.NumberColumn("Stok"),
-        "active_sizes": st.column_config.NumberColumn("Beden"),
-        "size_status": st.column_config.TextColumn("Beden Durumu"),
-        "discount_pct": st.column_config.NumberColumn("İndirim %"),
-        "days_old": st.column_config.NumberColumn("Gün"),
-        "price": st.column_config.NumberColumn("Fiyat (TL)", format="%.2f TL")
-    },
-    on_select="rerun",
-    selection_mode="multi-row"
-)
-
-# ==================== SEÇİLEN ÜRÜNLER İÇİN SIRALAMA KONTROLÜ (ÜSTTE) ====================
-selected_rows_indices = selected_data.selection.rows if hasattr(selected_data, "selection") else []
-
-if selected_rows_indices:
-    selected_items_df = view_df.iloc[selected_rows_indices]
-    selected_pids = selected_items_df["product_id"].tolist()
-    
-    st.info(f"📌 **{len(selected_pids)} adet ürün seçildi.** Sırasını değiştirmek için butonları kullanın:")
-    
-    b_col1, b_col2, b_col3, b_col4, b_col5 = st.columns([1.2, 1.2, 1.2, 1.8, 1.5])
-    
-    with b_col1:
-        if st.button("🔝 En Başa (1. Sıraya)", use_container_width=True):
-            chosen = df_sorted[df_sorted["product_id"].isin(selected_pids)]
-            rem = df_sorted[~df_sorted["product_id"].isin(selected_pids)]
-            st.session_state[working_key] = pd.concat([chosen, rem]).reset_index(drop=True)
-            st.rerun()
-
-    with b_col2:
-        if st.button("▲ 1 Sıra Yukarı", use_container_width=True):
-            curr = df_sorted.copy()
-            for pid in selected_pids:
-                idx = curr.index[curr["product_id"] == pid].tolist()[0]
-                if idx > 0 and curr.iloc[idx-1]["product_id"] not in selected_pids:
-                    curr.iloc[idx-1], curr.iloc[idx] = curr.iloc[idx].copy(), curr.iloc[idx-1].copy()
-            st.session_state[working_key] = curr.reset_index(drop=True)
-            st.rerun()
-
-    with b_col3:
-        if st.button("▼ 1 Sıra Aşağı", use_container_width=True):
-            curr = df_sorted.copy()
-            for pid in reversed(selected_pids):
-                idx = curr.index[curr["product_id"] == pid].tolist()[0]
-                if idx < len(curr) - 1 and curr.iloc[idx+1]["product_id"] not in selected_pids:
-                    curr.iloc[idx+1], curr.iloc[idx] = curr.iloc[idx].copy(), curr.iloc[idx+1].copy()
-            st.session_state[working_key] = curr.reset_index(drop=True)
-            st.rerun()
-
-    with b_col4:
-        target_num = st.number_input("Hedef Sıra No:", min_value=1, max_value=len(df_sorted), value=1, key="target_bulk_pos")
-    
-    with b_col5:
-        if st.button(f"🚀 {target_num}. Sıraya Taşı", use_container_width=True):
-            chosen = df_sorted[df_sorted["product_id"].isin(selected_pids)]
-            rem = df_sorted[~df_sorted["product_id"].isin(selected_pids)]
-            insert_at = max(0, target_num - 1)
-            new_df = pd.concat([rem.iloc[:insert_at], chosen, rem.iloc[insert_at:]]).reset_index(drop=True)
-            st.session_state[working_key] = new_df
-            st.rerun()
-
-    st.write("")
-    img_html_cards = []
-    for _, item in selected_items_df.head(10).iterrows():
-        img_src = item['image'] if item['image'] else ''
-        title_short = (item['title'][:18] + '..') if len(item['title']) > 18 else item['title']
-        img_tag = f"<img src='{img_src}' style='width: 90px; height: 120px; object-fit: cover; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); display: block; margin-bottom: 4px;' />" if img_src else "<div style='width: 90px; height: 120px; background: #eee; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #888;'>Görsel Yok</div>"
-        
-        card = f"""
-        <div style='display: inline-block; width: 92px; margin-right: 12px; vertical-align: top; text-align: center;'>
-            {img_tag}
-            <div style='font-size: 11px; font-weight: 700; color: #333;'>#{item['Planlanan Sıra']}</div>
-            <div style='font-size: 10px; color: #666; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>{title_short}</div>
-        </div>
-        """
-        img_html_cards.append(card)
-
-    st.markdown(
-        f"""
-        <div style='display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; margin-top: 6px;'>
-            {''.join(img_html_cards)}
-        </div>
-        """,
-        unsafe_allow_html=True
+    # 📋 Klasik Tablo Modu (Hızlı İnceleme İçin)
+    display_cols = [
+        "Planlanan Sıra", "image", "Mevcut Sıra", "title", "sku", "color", "season", 
+        "total_stock", "active_sizes", "size_status", "discount_pct", "days_old", "price"
+    ]
+    st.dataframe(
+        grid_df[display_cols],
+        use_container_width=True,
+        height=450,
+        column_config={
+            "image": st.column_config.ImageColumn("Görsel", width="small"),
+            "Planlanan Sıra": st.column_config.NumberColumn("Planlanan", width="small"),
+            "Mevcut Sıra": st.column_config.NumberColumn("Mevcut", width="small"),
+            "title": st.column_config.TextColumn("Ürün Adı", width="large"),
+            "sku": st.column_config.TextColumn("SKU"),
+            "color": st.column_config.TextColumn("Renk"),
+            "season": st.column_config.TextColumn("Sezon"),
+            "total_stock": st.column_config.NumberColumn("Stok"),
+            "active_sizes": st.column_config.NumberColumn("Beden"),
+            "size_status": st.column_config.TextColumn("Beden Durumu"),
+            "discount_pct": st.column_config.NumberColumn("İndirim %"),
+            "days_old": st.column_config.NumberColumn("Gün"),
+            "price": st.column_config.NumberColumn("Fiyat (TL)", format="%.2f TL")
+        }
     )
 
-# CANLIYA ALMA
+# ==================== CANLIYA ALMA ====================
 st.divider()
 st.subheader("🚀 Sıralamayı Vitrinde Canlıya Al")
 col_btn, col_info = st.columns([1, 2])
