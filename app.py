@@ -218,7 +218,6 @@ def get_collection_data_fast(collection_id):
             img_edges = p.get("images", {}).get("edges", [])
             if img_edges:
                 raw_url = img_edges[0]["node"].get("url", "")
-                # Görseli hızlı yüklenmesi için 250x330 boyutuna küçült
                 if ".jpg" in raw_url:
                     img_url = raw_url.replace(".jpg", "_250x330_crop_center.jpg")
                 elif ".png" in raw_url:
@@ -712,6 +711,25 @@ if (working_key not in st.session_state) or (st.session_state.get(last_filters_k
 
     st.session_state[working_key] = df_sorted
 
+# URL Parametresi veya Form ile Manuel Sıra Değiştirme Yakalama
+query_params = st.query_params
+if "move_pid" in query_params and "target_pos" in query_params:
+    move_pid = query_params["move_pid"]
+    try:
+        t_pos = int(query_params["target_pos"])
+        curr_df = st.session_state[working_key].copy()
+        matching_rows = curr_df[curr_df["product_id"] == move_pid]
+        if not matching_rows.empty:
+            chosen = matching_rows
+            rem = curr_df[curr_df["product_id"] != move_pid]
+            target_idx = max(0, min(t_pos - 1, len(curr_df) - 1))
+            new_df = pd.concat([rem.iloc[:target_idx], chosen, rem.iloc[target_idx:]]).reset_index(drop=True)
+            st.session_state[working_key] = new_df
+            st.query_params.clear()
+            st.rerun()
+    except Exception:
+        st.query_params.clear()
+
 df_sorted = st.session_state[working_key].copy()
 df_sorted["Planlanan Sıra"] = df_sorted.index + 1
 
@@ -742,15 +760,46 @@ m5.metric("Tükenen (0 Stok)", len(df_sorted[df_sorted["total_stock"] <= 0]))
 
 st.divider()
 
-# ==================== GÖRSEL IZGARA (KOMPAKT & HIZLI SORTMAX MODELİ) ====================
+# ==================== GÖRSEL IZGARA (SORTMAX MODİFİYELİ) ====================
 st.subheader("🎨 Akıllı Görsel Vitrin (Sortmax Modeli)")
-st.caption("💡 **Hızlı Kullanım:** Ürün kartlarını fareyle dilediğiniz sıraya sürükleyin. Çoklu taşımak için kutucukları seçip topluca taşıyabilirsiniz.")
 
+# Arama ve Mod Seçimi
 c_srch, c_view = st.columns([3, 1])
 with c_srch:
-    filter_q = st.text_input("🔍 Vitrinde Ürün / Model Ara:", placeholder="Örn: Aliza, Seyseller, Yeşil...")
+    filter_q = st.text_input("🔍 Vitrinde Ürün / Model Ara (Örn: Aliza, Seyseller):", placeholder="Model veya renk aratıp gerçek sırasını görebilir ve değiştirebilirsiniz...")
 with c_view:
     view_mode = st.radio("Görünüm Modu:", ["🎨 Görsel Vitrin (Sortmax)", "📋 Klasik Tablo"], horizontal=True)
+
+# Manuel Hedefe Taşıma Hızlı Çubuğu (Toplu veya Arama Üzerinden)
+with st.expander("⚡ Seçilen / Belirtilen Ürünü Belirli Sıraya Taşı", expanded=False):
+    t_c1, t_c2, t_c3 = st.columns([2.5, 1.2, 1.2])
+    with t_c1:
+        # Arama yapıldıysa sadece filtrelenenler, yapılmadıysa tüm liste
+        search_subset = df_sorted
+        if filter_q:
+            fq = filter_q.strip().lower()
+            search_subset = df_sorted[df_sorted["title"].str.lower().str.contains(fq) | df_sorted["sku"].str.lower().str.contains(fq)]
+        
+        target_prod_label = st.selectbox(
+            "Taşınacak Ürün:",
+            options=[f"#{r['Planlanan Sıra']} - {r['title']} ({r['color']})" for _, r in search_subset.iterrows()]
+        )
+    with t_c2:
+        new_target_pos = st.number_input("Hedef Sıra No:", min_value=1, max_value=len(df_sorted), value=1)
+    with t_c3:
+        st.write("")
+        if st.button("🚀 Sıraya Taşı", use_container_width=True):
+            if target_prod_label:
+                # Sıra numarasını metinden yakala
+                curr_rank = int(target_prod_label.split(" - ")[0].replace("#", ""))
+                row_to_move = df_sorted[df_sorted["Planlanan Sıra"] == curr_rank]
+                if not row_to_move.empty:
+                    chosen = row_to_move
+                    rem = df_sorted[df_sorted["Planlanan Sıra"] != curr_rank]
+                    target_idx = max(0, min(new_target_pos - 1, len(df_sorted) - 1))
+                    new_df = pd.concat([rem.iloc[:target_idx], chosen, rem.iloc[target_idx:]]).reset_index(drop=True)
+                    st.session_state[working_key] = new_df
+                    st.rerun()
 
 grid_df = df_sorted.copy()
 if filter_q:
@@ -769,7 +818,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
             "status": row["size_status"],
             "season": row["season"],
             "discount": float(row["discount_pct"]),
-            "order": int(row["Planlanan Sıra"])
+            "actual_rank": int(row["Planlanan Sıra"])  # Gerçek vitrin sırası
         })
     
     cards_json = json.dumps(cards_data)
@@ -828,17 +877,27 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 object-fit: cover;
                 object-position: center top;
             }}
-            .badge-order {{
+            /* Tıklanabilir ve Değiştirilebilir Sıra Kutusu */
+            .badge-order-input {{
                 position: absolute;
                 top: 4px;
                 left: 4px;
-                background: rgba(15, 23, 42, 0.85);
+                background: rgba(15, 23, 42, 0.9);
                 color: #ffffff;
-                font-size: 9px;
+                font-size: 10px;
                 font-weight: 700;
-                padding: 2px 5px;
-                border-radius: 3px;
-                z-index: 2;
+                padding: 2px 4px;
+                border-radius: 4px;
+                border: 1px solid rgba(255,255,255,0.3);
+                width: 44px;
+                text-align: center;
+                cursor: text;
+                z-index: 5;
+            }}
+            .badge-order-input:focus {{
+                background: #ffffff;
+                color: #0f172a;
+                outline: 2px solid #2563eb;
             }}
             .badge-discount {{
                 position: absolute;
@@ -895,7 +954,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
             const data = {cards_json};
             const grid = document.getElementById('productGrid');
             
-            data.forEach((p, idx) => {{
+            data.forEach((p) => {{
                 const card = document.createElement('div');
                 card.className = 'product-card';
                 card.dataset.id = p.id;
@@ -908,7 +967,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 
                 card.innerHTML = `
                     <div class="img-container">
-                        <span class="badge-order">#${{idx + 1}}</span>
+                        <input type="text" class="badge-order-input" value="#${{p.actual_rank}}" title="Sırayı değiştirmek için yazıp Enter'a basın" onkeydown="handleRankChange(event, '${{p.id}}')" onclick="event.stopPropagation();" />
                         ${{discountBadge}}
                         ${{p.image ? `<img src="${{p.image}}" loading="lazy" />` : '<span style="color:#94a3b8;font-size:10px;">Görsel Yok</span>'}}
                     </div>
@@ -924,26 +983,29 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 grid.appendChild(card);
             }});
             
+            function handleRankChange(e, pid) {{
+                if (e.key === 'Enter') {{
+                    let val = e.target.value.replace('#', '').trim();
+                    let num = parseInt(val);
+                    if (!isNaN(num) && num > 0) {{
+                        // Streamlit ana sayfasına hedef sırayı ilet
+                        window.top.location.search = `?move_pid=${{encodeURIComponent(pid)}}&target_pos=${{num}}`;
+                    }}
+                }}
+            }}
+            
             new Sortable(grid, {{
                 multiDrag: true,
                 selectedClass: 'sortable-selected',
                 fallbackTolerance: 3,
                 animation: 120,
-                ghostClass: 'sortable-ghost',
-                onEnd: function() {{
-                    const cards = Array.from(grid.getElementsByClassName('product-card'));
-                    cards.forEach((c, i) => {{
-                        const badge = c.querySelector('.badge-order');
-                        if(badge) badge.innerText = '#' + (i + 1);
-                    }});
-                }}
+                ghostClass: 'sortable-ghost'
             }});
         </script>
     </body>
     </html>
     """
     
-    # 125px görsel + 35px bilgi alanı ile ekranda 4-5 satır birden ferahça görünür
     estimated_height = max(500, (len(cards_data) // 4 + 1) * 175)
     components.html(html_code, height=min(estimated_height, 1200), scrolling=True)
 
