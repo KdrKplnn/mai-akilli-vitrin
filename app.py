@@ -505,6 +505,10 @@ selected_col_label = st.sidebar.selectbox(
 
 if st.sidebar.button("⚡ Canlı Verileri Yenile", use_container_width=True):
     st.cache_data.clear()
+    # Oturumdaki tüm eski koleksiyon çalışma listelerini temizle
+    keys_to_clear = [k for k in st.session_state.keys() if k.startswith("working_") or k.startswith("orig_") or k.startswith("filters_hash_")]
+    for k in keys_to_clear:
+        del st.session_state[k]
     st.rerun()
 
 if selected_col_label == "-- Lütfen Bir Koleksiyon Seçin veya Arayın --":
