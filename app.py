@@ -118,7 +118,6 @@ def extract_color(title, tags):
     return "DIGER"
 
 def extract_model_base(title):
-    # Ürün adındaki rengi ve genel kalıpları temizleyip saf model ismini çıkarır
     clean = title.upper()
     for c in COLORS_LIST:
         clean = re.sub(r'\b' + c + r'\b', '', clean)
@@ -303,7 +302,6 @@ def diversify_grid_4(df_in, lookback=4):
         
         chosen_idx = None
         
-        # 1. Öncelik: Hem modeli hem rengi son 4 üründe hiç geçmemiş olanı bul
         for i, item in enumerate(in_stock):
             m_ok = item["model_base"] not in recent_models
             c_ok = (item["color"] == "DIGER") or (item["color"] not in recent_colors)
@@ -311,14 +309,12 @@ def diversify_grid_4(df_in, lookback=4):
                 chosen_idx = i
                 break
         
-        # 2. Öncelik: Modeli son 4 üründe hiç geçmemiş olanı bul (en azından aynı model yan yana gelmesin)
         if chosen_idx is None:
             for i, item in enumerate(in_stock):
                 if item["model_base"] not in recent_models:
                     chosen_idx = i
                     break
         
-        # 3. Öncelik: En azından son 1 üründeki modelden farklı olsun
         if chosen_idx is None and len(result) > 0:
             last_m = result[-1]["model_base"]
             for i, item in enumerate(in_stock):
@@ -326,7 +322,6 @@ def diversify_grid_4(df_in, lookback=4):
                     chosen_idx = i
                     break
                     
-        # Çare kalmadıysa sıradakini al
         if chosen_idx is None:
             chosen_idx = 0
             
@@ -484,16 +479,17 @@ selected_col_label = st.sidebar.selectbox(
     help="Kutuya tıklayıp aradığınız koleksiyonun adını doğrudan klavyeden yazabilirsiniz."
 )
 
+# Canlı verileri yenile butonu doğrudan kutunun altında, her zaman görünür
+if st.sidebar.button("⚡ Canlı Verileri Yenile", use_container_width=True):
+    st.cache_data.clear()
+    st.rerun()
+
 if selected_col_label == "-- Lütfen Bir Koleksiyon Seçin veya Arayın --":
     st.title("🛍️ Mai Studios - Akıllı Vitrin Düzenleyici")
     st.info("👈 İşleme başlamak için sol taraftaki kutudan bir koleksiyon arayıp seçin veya en üstteki 'Toplu Vitrin Temizliği' panelini kullanın.")
     st.stop()
 
 selected_col_id = col_options[selected_col_label]
-
-if st.sidebar.button("⚡ Canlı Verileri Yenile"):
-    st.cache_data.clear()
-    st.rerun()
 
 with st.spinner("Koleksiyon ürünleri ve canlı vitrin sırası çekiliyor..."):
     df_raw = get_collection_data_fast(selected_col_id)
@@ -665,14 +661,12 @@ if (working_key not in st.session_state) or (st.session_state.get(last_filters_k
         df_sorted = st.session_state[session_key].copy()
         
     elif not other_active_rules and push_out_of_stock and not enable_clustering_fix:
-        # Sadece "Tükenenleri Sona At" açıkken
         base_df = st.session_state[session_key].copy()
         in_stock_df = base_df[base_df["total_stock"] > 0]
         out_of_stock_df = base_df[base_df["total_stock"] <= 0]
         df_sorted = pd.concat([in_stock_df, out_of_stock_df]).reset_index(drop=True)
         
     else:
-        # Skor veya mevcut sıra temel alınır
         if other_active_rules:
             df["Hesaplanan Skor"] = df.apply(compute_combined_score, axis=1)
             if push_out_of_stock:
@@ -682,7 +676,6 @@ if (working_key not in st.session_state) or (st.session_state.get(last_filters_k
             else:
                 df_sorted = df.sort_values(by="Hesaplanan Skor", ascending=False).reset_index(drop=True)
         else:
-            # Sadece 4'lü ızgara veya tükenenler açıkken
             base_df = st.session_state[session_key].copy()
             if push_out_of_stock:
                 in_stock_df = base_df[base_df["total_stock"] > 0]
@@ -691,7 +684,6 @@ if (working_key not in st.session_state) or (st.session_state.get(last_filters_k
             else:
                 df_sorted = base_df
 
-    # 4'lü Izgarada Model/Renk Ayrıştırma Devreye Girer
     if enable_clustering_fix and uploaded_backup is None:
         df_sorted = diversify_grid_4(df_sorted, lookback=4)
 
@@ -730,7 +722,6 @@ st.divider()
 # ==================== TABLODAN ARAMA VE SIRALAMA LİSTESİ ====================
 st.subheader("📋 Sıralama Tablosu & Hızlı Manuel Kontrol")
 
-# TABLO İÇİ ARAMA KUTUSU
 search_col, count_col = st.columns([3, 1])
 with search_col:
     table_search_query = st.text_input("🔍 Tabloda Ürün Adı veya SKU Ara:", placeholder="Ürün adı veya kodu yazarak anında bulun...")
