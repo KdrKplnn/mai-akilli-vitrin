@@ -56,33 +56,52 @@ def run_graphql_query(query, variables=None):
         return None
 
 # --- 1. KOLEKSİYONLARI ÇEKME ---
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def get_collections():
-    query = """
-    {
-      collections(first: 250) {
-        edges {
-          node {
-            id
-            title
-            productsCount {
-              count
-            }
-          }
-        }
-      }
-    }
-    """
-    res = run_graphql_query(query)
     collections = []
-    if res and "data" in res and "collections" in res["data"]:
-        for edge in res["data"]["collections"]["edges"]:
-            node = edge["node"]
-            collections.append({
-                "id": node["id"],
-                "title": node["title"],
-                "count": node["productsCount"]["count"] if "productsCount" in node else 0
-            })
+    has_next_page = True
+    cursor = None
+
+    while has_next_page:
+        cursor_str = f', after: "{cursor}"' if cursor else ""
+        query = f"""
+        {{
+            collections(first: 250{cursor_str}) {{
+                pageInfo {{
+                    hasNextPage
+                    endCursor
+                }}
+                edges {{
+                    node {{
+                        id
+                        title
+                        productsCount {{
+                            count
+                        }}
+                    }}
+                }}
+            }}
+        }}
+        """
+        res = run_graphql_query(query)
+        if res and "data" in res and "collections" in res["data"]:
+            data = res["data"]["collections"]
+            for edge in data.get("edges", []):
+                node = edge.get("node", {})
+                prod_count = node.get("productsCount")
+                count_val = prod_count.get("count", 0) if prod_count else 0
+                collections.append({
+                    "id": node.get("id"),
+                    "title": node.get("title"),
+                    "count": count_val
+                })
+            
+            page_info = data.get("pageInfo", {})
+            has_next_page = page_info.get("hasNextPage", False)
+            cursor = page_info.get("endCursor")
+        else:
+            break
+
     return collections
 
 # --- MODEL, RENK VE SEZON TESPİTİ ---
