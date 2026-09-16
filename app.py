@@ -13,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- GÖRSEL VE KART STİLLERİ ---
+# --- CSS STİLLERİ ---
 st.markdown("""
 <style>
     [data-testid="stDataFrame"] img {
@@ -217,7 +217,14 @@ def get_collection_data_fast(collection_id):
             img_url = ""
             img_edges = p.get("images", {}).get("edges", [])
             if img_edges:
-                img_url = img_edges[0]["node"].get("url", "")
+                raw_url = img_edges[0]["node"].get("url", "")
+                # Görseli hızlı yüklenmesi için 250x330 boyutuna küçült
+                if ".jpg" in raw_url:
+                    img_url = raw_url.replace(".jpg", "_250x330_crop_center.jpg")
+                elif ".png" in raw_url:
+                    img_url = raw_url.replace(".png", "_250x330_crop_center.png")
+                else:
+                    img_url = raw_url
 
             total_sizes = len(variants)
             active_sizes = 0
@@ -735,22 +742,22 @@ m5.metric("Tükenen (0 Stok)", len(df_sorted[df_sorted["total_stock"] <= 0]))
 
 st.divider()
 
-# ==================== GÖRSEL IZGARA (KOMPAKT & ÇOKLU SEÇİM) ====================
-st.subheader("🎨 Akıllı Görsel Vitrin (Sortmax Tarzı Sürükle-Bırak)")
-st.caption("💡 **İpucu:** Birden fazla ürünü seçip birlikte taşımak için kutucuklarına tıklayın veya **Ctrl** tuşuna basılı tutarak birden fazla kart seçin, ardından tutup dilediğiniz yere bırakın.")
+# ==================== GÖRSEL IZGARA (KOMPAKT & HIZLI SORTMAX MODELİ) ====================
+st.subheader("🎨 Akıllı Görsel Vitrin (Sortmax Modeli)")
+st.caption("💡 **Hızlı Kullanım:** Ürün kartlarını fareyle dilediğiniz sıraya sürükleyin. Çoklu taşımak için kutucukları seçip topluca taşıyabilirsiniz.")
 
 c_srch, c_view = st.columns([3, 1])
 with c_srch:
     filter_q = st.text_input("🔍 Vitrinde Ürün / Model Ara:", placeholder="Örn: Aliza, Seyseller, Yeşil...")
 with c_view:
-    view_mode = st.radio("Görünüm Modu:", ["🎨 Görsel Vitrin (Sürükle-Bırak)", "📋 Klasik Tablo"], horizontal=True)
+    view_mode = st.radio("Görünüm Modu:", ["🎨 Görsel Vitrin (Sortmax)", "📋 Klasik Tablo"], horizontal=True)
 
 grid_df = df_sorted.copy()
 if filter_q:
     fq = filter_q.strip().lower()
     grid_df = grid_df[grid_df["title"].str.lower().str.contains(fq) | grid_df["sku"].str.lower().str.contains(fq)]
 
-if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
+if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     cards_data = []
     for idx, row in grid_df.iterrows():
         cards_data.append({
@@ -776,23 +783,23 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 margin: 0;
-                padding: 6px;
+                padding: 4px;
                 background: #f8fafc;
             }}
             .grid-container {{
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
-                gap: 10px;
-                padding: 6px;
+                gap: 8px;
+                padding: 4px;
             }}
             .product-card {{
                 background: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
                 overflow: hidden;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+                box-shadow: 0 1px 2px rgba(0,0,0,0.05);
                 cursor: grab;
-                transition: transform 0.1s ease, box-shadow 0.1s ease, border-color 0.15s ease;
+                transition: transform 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease;
                 display: flex;
                 flex-direction: column;
                 user-select: none;
@@ -804,11 +811,10 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
             .product-card.sortable-selected {{
                 border: 2px solid #2563eb !important;
                 background: #eff6ff !important;
-                box-shadow: 0 4px 10px rgba(37,99,235,0.2) !important;
             }}
             .img-container {{
                 width: 100%;
-                height: 155px;
+                height: 125px;
                 background: #f1f5f9;
                 position: relative;
                 display: flex;
@@ -820,43 +826,44 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
                 width: 100%;
                 height: 100%;
                 object-fit: cover;
+                object-position: center top;
             }}
             .badge-order {{
                 position: absolute;
-                top: 5px;
-                left: 5px;
-                background: rgba(15, 23, 42, 0.88);
+                top: 4px;
+                left: 4px;
+                background: rgba(15, 23, 42, 0.85);
                 color: #ffffff;
-                font-size: 10px;
+                font-size: 9px;
                 font-weight: 700;
-                padding: 2px 6px;
-                border-radius: 4px;
+                padding: 2px 5px;
+                border-radius: 3px;
                 z-index: 2;
             }}
             .badge-discount {{
                 position: absolute;
-                top: 5px;
-                right: 5px;
+                top: 4px;
+                right: 4px;
                 background: #e11d48;
                 color: #ffffff;
-                font-size: 10px;
+                font-size: 9px;
                 font-weight: 700;
-                padding: 2px 6px;
-                border-radius: 4px;
+                padding: 2px 5px;
+                border-radius: 3px;
                 z-index: 2;
             }}
             .card-details {{
-                padding: 6px 8px;
+                padding: 5px 6px;
                 display: flex;
                 flex-direction: column;
                 gap: 3px;
                 background: #ffffff;
             }}
             .product-title {{
-                font-size: 11px;
+                font-size: 10px;
                 font-weight: 600;
                 color: #1e293b;
-                line-height: 1.2;
+                line-height: 1.15;
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
@@ -864,15 +871,16 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
             .tags-row {{
                 display: flex;
                 flex-wrap: wrap;
-                gap: 3px;
+                gap: 2px;
                 align-items: center;
             }}
             .tag {{
-                font-size: 9px;
+                font-size: 8.5px;
                 font-weight: 600;
-                padding: 1px 5px;
+                padding: 1px 4px;
                 border-radius: 3px;
-                line-height: 1.2;
+                line-height: 1.1;
+                white-space: nowrap;
             }}
             .tag-stock {{ background: #dcfce7; color: #166534; }}
             .tag-color {{ background: #f1f5f9; color: #475569; }}
@@ -902,7 +910,7 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
                     <div class="img-container">
                         <span class="badge-order">#${{idx + 1}}</span>
                         ${{discountBadge}}
-                        ${{p.image ? `<img src="${{p.image}}" />` : '<span style="color:#94a3b8;font-size:11px;">Görsel Yok</span>'}}
+                        ${{p.image ? `<img src="${{p.image}}" loading="lazy" />` : '<span style="color:#94a3b8;font-size:10px;">Görsel Yok</span>'}}
                     </div>
                     <div class="card-details">
                         <div class="product-title" title="${{p.title}}">${{p.title}}</div>
@@ -920,7 +928,7 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
                 multiDrag: true,
                 selectedClass: 'sortable-selected',
                 fallbackTolerance: 3,
-                animation: 150,
+                animation: 120,
                 ghostClass: 'sortable-ghost',
                 onEnd: function() {{
                     const cards = Array.from(grid.getElementsByClassName('product-card'));
@@ -935,8 +943,8 @@ if view_mode == "🎨 Görsel Vitrin (Sürükle-Bırak)":
     </html>
     """
     
-    # Kompakt 155px yükseklik sayesinde daha fazla satır ekrana sığar
-    estimated_height = max(500, (len(cards_data) // 4 + 1) * 220)
+    # 125px görsel + 35px bilgi alanı ile ekranda 4-5 satır birden ferahça görünür
+    estimated_height = max(500, (len(cards_data) // 4 + 1) * 175)
     components.html(html_code, height=min(estimated_height, 1200), scrolling=True)
 
 else:
