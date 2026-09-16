@@ -664,7 +664,12 @@ current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{f_recent_stoc
 last_filters_key = f"filters_hash_{selected_col_id}"
 
 # ÇALIŞMA LİSTESİ BELİRLEME
-if (working_key not in st.session_state) or (st.session_state.get(last_filters_key) != current_filters_hash):
+if working_key not in st.session_state:
+    st.session_state[working_key] = st.session_state[session_key].copy()
+    st.session_state[last_filters_key] = current_filters_hash
+
+# Sadece kullanıcı sol filtrelerden birini değiştirdiğinde otomatik yeniden sırala
+if st.session_state.get(last_filters_key) != current_filters_hash:
     st.session_state[last_filters_key] = current_filters_hash
     
     if uploaded_backup is not None:
@@ -711,26 +716,8 @@ if (working_key not in st.session_state) or (st.session_state.get(last_filters_k
 
     st.session_state[working_key] = df_sorted
 
-# URL Parametresi veya Form ile Manuel Sıra Değiştirme Yakalama
-query_params = st.query_params
-if "move_pid" in query_params and "target_pos" in query_params:
-    move_pid = query_params["move_pid"]
-    try:
-        t_pos = int(query_params["target_pos"])
-        curr_df = st.session_state[working_key].copy()
-        matching_rows = curr_df[curr_df["product_id"] == move_pid]
-        if not matching_rows.empty:
-            chosen = matching_rows
-            rem = curr_df[curr_df["product_id"] != move_pid]
-            target_idx = max(0, min(t_pos - 1, len(curr_df) - 1))
-            new_df = pd.concat([rem.iloc[:target_idx], chosen, rem.iloc[target_idx:]]).reset_index(drop=True)
-            st.session_state[working_key] = new_df
-            st.query_params.clear()
-            st.rerun()
-    except Exception:
-        st.query_params.clear()
-
-df_sorted = st.session_state[working_key].copy()
+# Mevcut çalışma listesini al ve planlanan sırayı güncelle
+df_sorted = st.session_state[working_key].copy().reset_index(drop=True)
 df_sorted["Planlanan Sıra"] = df_sorted.index + 1
 
 # ==================== ANA EKRAN ====================
@@ -760,51 +747,61 @@ m5.metric("Tükenen (0 Stok)", len(df_sorted[df_sorted["total_stock"] <= 0]))
 
 st.divider()
 
-# ==================== GÖRSEL IZGARA (SORTMAX MODİFİYELİ) ====================
+# ==================== GÖRSEL IZGARA & HIZLI MANUEL TAŞIMA ====================
 st.subheader("🎨 Akıllı Görsel Vitrin (Sortmax Modeli)")
 
 # Arama ve Mod Seçimi
 c_srch, c_view = st.columns([3, 1])
 with c_srch:
-    filter_q = st.text_input("🔍 Vitrinde Ürün / Model Ara (Örn: Aliza, Seyseller):", placeholder="Model veya renk aratıp gerçek sırasını görebilir ve değiştirebilirsiniz...")
+    filter_q = st.text_input("🔍 Vitrinde Ürün / Model Ara (Örn: Aliza, Seyseller, Takım):", placeholder="Model veya renk aratıp gerçek vitrin sırasını görebilirsiniz...")
 with c_view:
     view_mode = st.radio("Görünüm Modu:", ["🎨 Görsel Vitrin (Sortmax)", "📋 Klasik Tablo"], horizontal=True)
 
-# Manuel Hedefe Taşıma Hızlı Çubuğu (Toplu veya Arama Üzerinden)
-with st.expander("⚡ Seçilen / Belirtilen Ürünü Belirli Sıraya Taşı", expanded=False):
-    t_c1, t_c2, t_c3 = st.columns([2.5, 1.2, 1.2])
+# Arama Filtrelemesi
+grid_df = df_sorted.copy()
+if filter_q:
+    fq = filter_q.strip().lower()
+    grid_df = grid_df[grid_df["title"].str.lower().str.contains(fq) | grid_df["sku"].str.lower().str.contains(fq)]
+
+# ==================== 🚀 HIZLI SIRA DEĞİŞTİRME PANELİ ====================
+with st.container():
+    t_c1, t_c2, t_c3 = st.columns([3, 1, 1.2])
     with t_c1:
-        # Arama yapıldıysa sadece filtrelenenler, yapılmadıysa tüm liste
-        search_subset = df_sorted
-        if filter_q:
-            fq = filter_q.strip().lower()
-            search_subset = df_sorted[df_sorted["title"].str.lower().str.contains(fq) | df_sorted["sku"].str.lower().str.contains(fq)]
-        
-        target_prod_label = st.selectbox(
-            "Taşınacak Ürün:",
-            options=[f"#{r['Planlanan Sıra']} - {r['title']} ({r['color']})" for _, r in search_subset.iterrows()]
+        # Seçeneklerde gerçek vitrin sırası ve adı net görünsün
+        search_options = [f"#{r['Planlanan Sıra']} - {r['title']} ({r['color']})" for _, r in grid_df.iterrows()]
+        selected_move_items = st.multiselect(
+            "📌 Taşınacak Ürün(ler)i Seçin (Birden fazla seçilebilir):",
+            options=search_options,
+            default=[search_options[0]] if (search_options and filter_q) else []
         )
     with t_c2:
         new_target_pos = st.number_input("Hedef Sıra No:", min_value=1, max_value=len(df_sorted), value=1)
     with t_c3:
         st.write("")
-        if st.button("🚀 Sıraya Taşı", use_container_width=True):
-            if target_prod_label:
-                # Sıra numarasını metinden yakala
-                curr_rank = int(target_prod_label.split(" - ")[0].replace("#", ""))
-                row_to_move = df_sorted[df_sorted["Planlanan Sıra"] == curr_rank]
-                if not row_to_move.empty:
-                    chosen = row_to_move
-                    rem = df_sorted[df_sorted["Planlanan Sıra"] != curr_rank]
-                    target_idx = max(0, min(new_target_pos - 1, len(df_sorted) - 1))
-                    new_df = pd.concat([rem.iloc[:target_idx], chosen, rem.iloc[target_idx:]]).reset_index(drop=True)
-                    st.session_state[working_key] = new_df
-                    st.rerun()
+        st.write("")
+        if st.button("🚀 Hedef Sıraya Taşı", type="primary", use_container_width=True):
+            if selected_move_items:
+                # Seçilen ürünlerin gerçek sıra numaralarını yakala
+                ranks_to_move = [int(item.split(" - ")[0].replace("#", "")) for item in selected_move_items]
+                curr = df_sorted.copy()
+                
+                # Seçilenleri ve kalanları ayır
+                chosen_rows = curr[curr["Planlanan Sıra"].isin(ranks_to_move)]
+                remaining_rows = curr[~curr["Planlanan Sıra"].isin(ranks_to_move)]
+                
+                # İstenen hedef sıraya yerleştir (aradaki diğer ürünler otomatik 1 kayar)
+                insert_idx = max(0, min(new_target_pos - 1, len(remaining_rows)))
+                new_full_df = pd.concat([
+                    remaining_rows.iloc[:insert_idx],
+                    chosen_rows,
+                    remaining_rows.iloc[insert_idx:]
+                ]).reset_index(drop=True)
+                
+                # Yeni sırayı kesin olarak oturuma kaydet
+                st.session_state[working_key] = new_full_df
+                st.rerun()
 
-grid_df = df_sorted.copy()
-if filter_q:
-    fq = filter_q.strip().lower()
-    grid_df = grid_df[grid_df["title"].str.lower().str.contains(fq) | grid_df["sku"].str.lower().str.contains(fq)]
+st.caption("💡 **Nasıl Çalışır?:** Ürünü aratıp yukarıdan seçtikten sonra hedef sıra numarasını girip butona bastığınızda doğrudan o sıraya gider, diğer tüm ürünler bozulmadan otomatik olarak birer basamak kayar.")
 
 if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     cards_data = []
@@ -857,10 +854,6 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
             .product-card:active {{
                 cursor: grabbing;
             }}
-            .product-card.sortable-selected {{
-                border: 2px solid #2563eb !important;
-                background: #eff6ff !important;
-            }}
             .img-container {{
                 width: 100%;
                 height: 125px;
@@ -877,8 +870,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 object-fit: cover;
                 object-position: center top;
             }}
-            /* Tıklanabilir ve Değiştirilebilir Sıra Kutusu */
-            .badge-order-input {{
+            .badge-order {{
                 position: absolute;
                 top: 4px;
                 left: 4px;
@@ -886,18 +878,10 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 color: #ffffff;
                 font-size: 10px;
                 font-weight: 700;
-                padding: 2px 4px;
+                padding: 2px 6px;
                 border-radius: 4px;
-                border: 1px solid rgba(255,255,255,0.3);
-                width: 44px;
-                text-align: center;
-                cursor: text;
-                z-index: 5;
-            }}
-            .badge-order-input:focus {{
-                background: #ffffff;
-                color: #0f172a;
-                outline: 2px solid #2563eb;
+                z-index: 2;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.3);
             }}
             .badge-discount {{
                 position: absolute;
@@ -967,7 +951,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 
                 card.innerHTML = `
                     <div class="img-container">
-                        <input type="text" class="badge-order-input" value="#${{p.actual_rank}}" title="Sırayı değiştirmek için yazıp Enter'a basın" onkeydown="handleRankChange(event, '${{p.id}}')" onclick="event.stopPropagation();" />
+                        <span class="badge-order">#${{p.actual_rank}}</span>
                         ${{discountBadge}}
                         ${{p.image ? `<img src="${{p.image}}" loading="lazy" />` : '<span style="color:#94a3b8;font-size:10px;">Görsel Yok</span>'}}
                     </div>
@@ -983,21 +967,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 grid.appendChild(card);
             }});
             
-            function handleRankChange(e, pid) {{
-                if (e.key === 'Enter') {{
-                    let val = e.target.value.replace('#', '').trim();
-                    let num = parseInt(val);
-                    if (!isNaN(num) && num > 0) {{
-                        // Streamlit ana sayfasına hedef sırayı ilet
-                        window.top.location.search = `?move_pid=${{encodeURIComponent(pid)}}&target_pos=${{num}}`;
-                    }}
-                }}
-            }}
-            
             new Sortable(grid, {{
-                multiDrag: true,
-                selectedClass: 'sortable-selected',
-                fallbackTolerance: 3,
                 animation: 120,
                 ghostClass: 'sortable-ghost'
             }});
