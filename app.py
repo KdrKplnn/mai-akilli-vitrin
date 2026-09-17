@@ -533,6 +533,23 @@ if (session_key not in st.session_state) or (len(st.session_state[session_key]) 
     st.session_state[session_key] = df_backup
     st.session_state[working_key] = df_backup.copy()
 
+# ==================== ⚡ DOĞRUDAN SENKRONİZASYON KÖPRÜSÜ ====================
+# JavaScript butona bastığında gelen yeni ID sırasını anında hafızaya mühürler
+if "new_synced_order" in st.query_params:
+    try:
+        raw_pids = st.query_params["new_synced_order"]
+        new_ordered_ids = json.loads(raw_pids)
+        curr = st.session_state[working_key].copy()
+        id_map = {pid: idx for idx, pid in enumerate(new_ordered_ids)}
+        curr["sort_temp"] = curr["product_id"].map(id_map).fillna(999999)
+        new_df_saved = curr.sort_values(by="sort_temp").drop(columns=["sort_temp"]).reset_index(drop=True)
+        st.session_state[working_key] = new_df_saved
+        st.toast("✅ Görsel vitrin değişiklikleri başarıyla kaydedildi!", icon="🎉")
+    except Exception as e:
+        st.error(f"Sıra işlenirken hata: {e}")
+    st.query_params.clear()
+    st.rerun()
+
 st.sidebar.divider()
 
 # --- 🚀 HIZLI STRATEJİLER ---
@@ -667,7 +684,6 @@ any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
 current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{f_recent_stock}_{f_season}_{selected_priority_seasons}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
-# Sadece sol filtrelerden biri değiştiğinde baştan sırala
 if st.session_state.get(last_filters_key) != current_filters_hash:
     st.session_state[last_filters_key] = current_filters_hash
     
@@ -797,37 +813,6 @@ with t_c3:
         else:
             st.warning("Lütfen taşınacak en az bir ürün seçin.")
 
-# ==================== 💾 TEK TIKLA GÖRSEL SIRAYI MÜHÜRLEME FORMU ====================
-with st.form("apply_visual_changes_form"):
-    sub_col1, sub_col2 = st.columns([3.5, 1.5])
-    with sub_col1:
-        # Bu alan gizli/arkada çalışır, JavaScript tarafından otomatik beslenir
-        sync_payload = st.text_area(
-            "Otomatik Sıra Verisi", 
-            key="drag_drop_auto_payload", 
-            help="Bu kutu görsel vitrinde kart sürükledikçe otomatik güncellenir.",
-            label_visibility="collapsed"
-        )
-    with sub_col2:
-        submitted = st.form_submit_button("💾 Vitrin Değişikliklerini Tabloya Aktar", type="primary", use_container_width=True)
-        if submitted:
-            if sync_payload and sync_payload.strip():
-                try:
-                    new_ordered_ids = json.loads(sync_payload.strip())
-                    curr = st.session_state[working_key].copy()
-                    id_map = {pid: idx for idx, pid in enumerate(new_ordered_ids)}
-                    curr["sort_temp"] = curr["product_id"].map(id_map).fillna(999999)
-                    new_df_saved = curr.sort_values(by="sort_temp").drop(columns=["sort_temp"]).reset_index(drop=True)
-                    st.session_state[working_key] = new_df_saved
-                    st.success("🎉 Harika! Sürüklediğiniz sıra hem görsel vitrine hem klasik tabloya aktarıldı!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Sıralama aktarılırken hata: {e}")
-            else:
-                st.info("Henüz yeni bir sürükleme yapılmadı. Kartların yerini değiştirip butona basın.")
-
-st.caption("💡 **Sortmax Tarzı Kullanım:** Kartları fareyle istediğiniz yere sürükleyip bırakabilir veya sol üstteki **# kutucuğuna istediğiniz sayıyı yazıp Enter'a basabilirsiniz**. İşiniz tamamen bitince yukarıdaki mavi **'💾 Vitrin Değişikliklerini Tabloya Aktar'** butonuna basmanız yeterlidir.")
-
 if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     cards_data = []
     for idx, row in grid_df.iterrows():
@@ -857,11 +842,42 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 padding: 4px;
                 background: #f8fafc;
             }}
+            .action-bar {{
+                position: sticky;
+                top: 0;
+                background: #ffffff;
+                padding: 10px 14px;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                margin-bottom: 12px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+                z-index: 100;
+            }}
+            .save-btn {{
+                background: #ff4b4b;
+                color: #ffffff;
+                font-weight: 700;
+                font-size: 13px;
+                padding: 8px 18px;
+                border: none;
+                border-radius: 6px;
+                cursor: pointer;
+                transition: background 0.15s ease;
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+            }}
+            .save-btn:hover {{
+                background: #e03131;
+            }}
             .grid-container {{
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
                 gap: 8px;
-                padding: 4px;
+                padding: 2px;
             }}
             .product-card {{
                 background: #ffffff;
@@ -870,7 +886,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 overflow: hidden;
                 box-shadow: 0 1px 2px rgba(0,0,0,0.05);
                 cursor: grab;
-                transition: transform 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease;
+                transition: transform 0.1s ease, box-shadow 0.1s ease;
                 display: flex;
                 flex-direction: column;
                 user-select: none;
@@ -878,11 +894,6 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
             }}
             .product-card:active {{
                 cursor: grabbing;
-            }}
-            .product-card.sortable-selected {{
-                border: 2px solid #2563eb !important;
-                background: #eff6ff !important;
-                box-shadow: 0 2px 8px rgba(37,99,235,0.25) !important;
             }}
             .img-container {{
                 width: 100%;
@@ -971,6 +982,15 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
         </style>
     </head>
     <body>
+        <div class="action-bar">
+            <span style="font-size: 12px; color: #475569; font-weight: 600;">
+                💡 Kartları sürükleyin veya sol üstteki kutuya sıra yazıp Enter'a basın.
+            </span>
+            <button class="save-btn" onclick="saveVisualOrder()">
+                💾 Vitrin Değişikliklerini Tabloya Aktar & Kesinleştir
+            </button>
+        </div>
+
         <div id="productGrid" class="grid-container"></div>
 
         <script>
@@ -1023,7 +1043,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                                 }} else {{
                                     grid.insertBefore(card, allCards[targetIndex]);
                                 }}
-                                syncChangesToParent();
+                                refreshBadges();
                             }}
                         }}
                     }}
@@ -1032,24 +1052,22 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 grid.appendChild(card);
             }});
             
-            function syncChangesToParent() {{
+            function refreshBadges() {{
                 const cards = Array.from(grid.getElementsByClassName('product-card'));
-                const orderedIds = [];
                 cards.forEach((c, i) => {{
                     const inp = c.querySelector('.badge-order-input');
                     if (inp) inp.value = '#' + (i + 1);
-                    orderedIds.push(c.dataset.id);
                 }});
+            }}
+
+            function saveVisualOrder() {{
+                const cards = Array.from(grid.getElementsByClassName('product-card'));
+                const orderedIds = cards.map(c => c.dataset.id);
                 
-                // Streamlit Formu içerisindeki textarea'yı bulup otomatik doldurur
-                try {{
-                    const parentTextarea = window.parent.document.querySelector('textarea[aria-label="Otomatik Sıra Verisi"]');
-                    if (parentTextarea) {{
-                        parentTextarea.value = JSON.stringify(orderedIds);
-                        parentTextarea.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        parentTextarea.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    }}
-                }} catch(err) {{}}
+                // Doğrudan Streamlit URL parametresine yazarak sayfayı anında yeni sırayla günceller
+                const parentUrl = new URL(window.parent.location.href);
+                parentUrl.searchParams.set('new_synced_order', JSON.stringify(orderedIds));
+                window.parent.location.href = parentUrl.toString();
             }}
 
             new Sortable(grid, {{
@@ -1060,12 +1078,9 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 animation: 120,
                 ghostClass: 'sortable-ghost',
                 onEnd: function() {{
-                    syncChangesToParent();
+                    refreshBadges();
                 }}
             }});
-            
-            // İlk yüklemede mevcut sırayı forma bağla
-            setTimeout(syncChangesToParent, 400);
         </script>
     </body>
     </html>
