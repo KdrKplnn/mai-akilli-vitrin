@@ -503,6 +503,7 @@ selected_col_label = st.sidebar.selectbox(
     help="Kutuya tıklayıp aradığınız koleksiyonun adını doğrudan klavyeden yazabilirsiniz."
 )
 
+# Canlı verileri sıfırlama butonu
 if st.sidebar.button("⚡ Canlı Verileri Yenile", use_container_width=True):
     st.cache_data.clear()
     keys_to_clear = [k for k in list(st.session_state.keys()) if k.startswith("working_") or k.startswith("orig_") or k.startswith("filters_hash_")]
@@ -527,34 +528,12 @@ if df_raw.empty:
 session_key = f"orig_{selected_col_id}"
 working_key = f"working_{selected_col_id}"
 
+# Koleksiyon ürün adedi değişmişse oturumu güncelle
 if (session_key not in st.session_state) or (len(st.session_state[session_key]) != len(df_raw)):
     df_backup = df_raw.copy()
     df_backup["Mevcut Sıra"] = df_backup.index + 1
     st.session_state[session_key] = df_backup
     st.session_state[working_key] = df_backup.copy()
-
-# ==================== ⚡ KART ÜZERİNDEN ENTER İLE TAŞIMA KÖPRÜSÜ ====================
-qp = st.query_params
-if "move_id" in qp and "to_pos" in qp:
-    try:
-        m_id = qp["move_id"]
-        to_p = int(qp["to_pos"])
-        curr = st.session_state[working_key].copy().reset_index(drop=True)
-        chosen_row = curr[curr["product_id"] == m_id]
-        remaining = curr[curr["product_id"] != m_id]
-        
-        if not chosen_row.empty:
-            ins_idx = max(0, min(to_p - 1, len(remaining)))
-            new_df = pd.concat([
-                remaining.iloc[:ins_idx],
-                chosen_row,
-                remaining.iloc[ins_idx:]
-            ]).reset_index(drop=True)
-            st.session_state[working_key] = new_df
-    except Exception:
-        pass
-    st.query_params.clear()
-    st.rerun()
 
 st.sidebar.divider()
 
@@ -690,7 +669,7 @@ any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
 current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{f_recent_stock}_{f_season}_{selected_priority_seasons}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
-# Sadece sol filtrelerden biri değiştiğinde baştan sırala
+# Sadece kullanıcı sol filtrelerden birini değiştirdiğinde otomatik yeniden sırala
 if st.session_state.get(last_filters_key) != current_filters_hash:
     st.session_state[last_filters_key] = current_filters_hash
     
@@ -778,6 +757,7 @@ with c_srch:
 with c_view:
     view_mode = st.radio("Görünüm Modu:", ["🎨 Görsel Vitrin (Sortmax)", "📋 Klasik Tablo"], horizontal=True)
 
+# Arama Filtrelemesi
 grid_df = df_sorted.copy()
 if filter_q:
     fq = filter_q.strip().lower()
@@ -820,7 +800,33 @@ with t_c3:
         else:
             st.warning("Lütfen taşınacak en az bir ürün seçin.")
 
-st.caption("💡 **Kullanım:** Kartların sol üstündeki **# kutucuğuna istediğiniz sırayı yazıp Enter'a basın**. Ürün doğrudan o sıraya taşınır, hem görsel vitrinde hem klasik tabloda sırası güncellenir.")
+# ==================== 💾 TOPLU DEĞİŞİKLİKLERİ TABLOYA AKTARMA KÖPRÜSÜ ====================
+st.markdown("---")
+b_c1, b_c2 = st.columns([3.5, 1.5])
+with b_c1:
+    sync_order_json = st.text_input(
+        "Sürüklenen Sıra Verisi:",
+        placeholder="Kartları sürüklediğinizde veya kutudan sıra numarası girdiğinizde alt paneldeki metni buraya yapıştırın...",
+        label_visibility="collapsed"
+    )
+with b_c2:
+    if st.button("💾 Değişiklikleri Tabloya Aktar & Kaydet", type="primary", use_container_width=True):
+        if sync_order_json:
+            try:
+                new_ordered_ids = json.loads(sync_order_json)
+                curr = st.session_state[working_key].copy()
+                id_map = {pid: idx for idx, pid in enumerate(new_ordered_ids)}
+                curr["sort_temp"] = curr["product_id"].map(id_map).fillna(999999)
+                new_df_saved = curr.sort_values(by="sort_temp").drop(columns=["sort_temp"]).reset_index(drop=True)
+                st.session_state[working_key] = new_df_saved
+                st.success("🎉 Harika! Görsel vitrinde yaptığınız tüm değişiklikler klasik tabloya ve Shopify aktarım sırasına mühürlendi!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Sıralama verisi çözülemedi: {e}")
+        else:
+            st.warning("Lütfen önce aşağıdaki 'Sırayı Kopyala' butonuna basarak güncel sırayı kutuya yapıştırın.")
+
+st.caption("💡 **Sortmax Tarzı Kullanım:** Kartların sol üstündeki **# kutucuğuna istediğiniz sırayı yazıp Enter'a basabilir** veya fareyle tutup istediğiniz yere sürükleyebilirsiniz. Sayfa siz tüm değişiklikleri bitirip yukarıdaki mavi butona basana kadar **asla kendini yenilemez**, işinizi bölmez.")
 
 if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     cards_data = []
@@ -843,6 +849,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     <!DOCTYPE html>
     <html>
     <head>
+        <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
         <style>
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -862,9 +869,20 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 border-radius: 6px;
                 overflow: hidden;
                 box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+                cursor: grab;
+                transition: transform 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease;
                 display: flex;
                 flex-direction: column;
+                user-select: none;
                 position: relative;
+            }}
+            .product-card:active {{
+                cursor: grabbing;
+            }}
+            .product-card.sortable-selected {{
+                border: 2px solid #2563eb !important;
+                background: #eff6ff !important;
+                box-shadow: 0 2px 8px rgba(37,99,235,0.25) !important;
             }}
             .img-container {{
                 width: 100%;
@@ -888,12 +906,12 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 left: 4px;
                 background: rgba(15, 23, 42, 0.92);
                 color: #ffffff;
-                font-size: 11px;
+                font-size: 10px;
                 font-weight: 700;
                 padding: 2px 4px;
                 border-radius: 4px;
                 border: 1px solid rgba(255,255,255,0.4);
-                width: 48px;
+                width: 44px;
                 text-align: center;
                 cursor: text;
                 z-index: 5;
@@ -950,14 +968,49 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
             .tag-status-tam {{ background: #e0f2fe; color: #0369a1; }}
             .tag-status-kirik {{ background: #fef3c7; color: #b45309; }}
             .tag-status-tukendi {{ background: #fee2e2; color: #b91c1c; }}
+            .sync-panel {{
+                margin-top: 15px;
+                padding: 10px;
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }}
+            .sync-input {{
+                flex: 1;
+                font-size: 11px;
+                padding: 6px 8px;
+                border: 1px solid #94a3b8;
+                border-radius: 4px;
+                background: #f8fafc;
+            }}
+            .sync-btn {{
+                background: #2563eb;
+                color: #fff;
+                font-weight: 600;
+                font-size: 11px;
+                padding: 6px 12px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }}
         </style>
     </head>
     <body>
         <div id="productGrid" class="grid-container"></div>
+        
+        <div class="sync-panel">
+            <span style="font-size:11px; font-weight:700; color:#334155;">📋 Sürüklenen / Değişen Sıra:</span>
+            <input type="text" id="syncBox" class="sync-input" readonly placeholder="Değişiklik yaptıkça bu kutu otomatik güncellenir..." />
+            <button class="sync-btn" onclick="copyAndNotify()">📋 Sırayı Kopyala</button>
+        </div>
 
         <script>
             const data = {cards_json};
             const grid = document.getElementById('productGrid');
+            const syncBox = document.getElementById('syncBox');
             
             data.forEach((p) => {{
                 const card = document.createElement('div');
@@ -972,7 +1025,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 
                 card.innerHTML = `
                     <div class="img-container">
-                        <input type="text" class="badge-order-input" value="#${{p.actual_rank}}" title="Yeni sıra numarasını yazıp Enter'a basın" />
+                        <input type="text" class="badge-order-input" value="#${{p.actual_rank}}" title="Yeni sıra numarasını yazıp Enter'a basın" onclick="event.stopPropagation();" />
                         ${{discountBadge}}
                         ${{p.image ? `<img src="${{p.image}}" loading="lazy" />` : '<span style="color:#94a3b8;font-size:10px;">Görsel Yok</span>'}}
                     </div>
@@ -986,23 +1039,68 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                     </div>
                 `;
                 
-                // Kutucuğa hedef sıra yazıp Enter'a basıldığında tetikleme
+                // Sol üstteki kutucuğa numara yazıp Enter'a basınca o sıraya taşıma mantığı
                 const inp = card.querySelector('.badge-order-input');
                 inp.addEventListener('keydown', function(e) {{
                     if (e.key === 'Enter') {{
                         e.preventDefault();
                         let targetNum = parseInt(inp.value.replace('#', '').trim());
                         if (!isNaN(targetNum) && targetNum > 0) {{
-                            const parentUrl = new URL(window.parent.location.href);
-                            parentUrl.searchParams.set('move_id', p.id);
-                            parentUrl.searchParams.set('to_pos', targetNum);
-                            window.parent.location.href = parentUrl.toString();
+                            const allCards = Array.from(grid.getElementsByClassName('product-card'));
+                            const currentIndex = allCards.indexOf(card);
+                            let targetIndex = Math.min(Math.max(targetNum - 1, 0), allCards.length - 1);
+                            
+                            if (targetIndex !== currentIndex) {{
+                                if (targetIndex >= allCards.length - 1) {{
+                                    grid.appendChild(card);
+                                }} else if (targetIndex > currentIndex) {{
+                                    grid.insertBefore(card, allCards[targetIndex].nextSibling);
+                                }} else {{
+                                    grid.insertBefore(card, allCards[targetIndex]);
+                                }}
+                                updateAllBadgesAndSync();
+                            }}
                         }}
                     }}
                 }});
                 
                 grid.appendChild(card);
             }});
+            
+            function updateAllBadgesAndSync() {{
+                const cards = Array.from(grid.getElementsByClassName('product-card'));
+                const orderedIds = [];
+                cards.forEach((c, i) => {{
+                    const inp = c.querySelector('.badge-order-input');
+                    if (inp) inp.value = '#' + (i + 1);
+                    orderedIds.push(c.dataset.id);
+                }});
+                syncBox.value = JSON.stringify(orderedIds);
+            }}
+
+            function copyAndNotify() {{
+                if(!syncBox.value) {{
+                    updateAllBadgesAndSync();
+                }}
+                navigator.clipboard.writeText(syncBox.value).then(() => {{
+                    alert('✅ Güncel vitrin sırası kopyalandı! Şimdi yukarıdaki kutucuğa yapıştırıp "💾 Değişiklikleri Tabloya Aktar & Kaydet" butonuna basın.');
+                }});
+            }}
+
+            new Sortable(grid, {{
+                multiDrag: true,
+                selectedClass: 'sortable-selected',
+                multiDragKey: 'Control',
+                fallbackTolerance: 3,
+                animation: 120,
+                ghostClass: 'sortable-ghost',
+                onEnd: function() {{
+                    updateAllBadgesAndSync();
+                }}
+            }});
+            
+            // İlk açılışta mevcut sırayı syncBox içerisine hazırla
+            updateAllBadgesAndSync();
         </script>
     </body>
     </html>
