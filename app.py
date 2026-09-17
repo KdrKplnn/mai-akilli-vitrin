@@ -4,7 +4,7 @@ import requests
 import time
 import re
 import json
-import streamlit.components.v1 as components
+from streamlit_sortables import sort_items
 
 # --- SAYFA YAPILANDIRMASI ---
 st.set_page_config(
@@ -18,7 +18,7 @@ st.markdown("""
 <style>
     [data-testid="stDataFrame"] img {
         height: 100% !important;
-        max-height: 48px !important;
+        max-height: 52px !important;
         width: auto !important;
         object-fit: contain !important;
         border-radius: 4px;
@@ -503,7 +503,6 @@ selected_col_label = st.sidebar.selectbox(
     help="Kutuya tıklayıp aradığınız koleksiyonun adını doğrudan klavyeden yazabilirsiniz."
 )
 
-# Canlı verileri ve oturum geçmişini tertemiz yapan akıllı buton
 if st.sidebar.button("⚡ Canlı Verileri Yenile", use_container_width=True):
     st.cache_data.clear()
     keys_to_clear = [k for k in list(st.session_state.keys()) if k.startswith("working_") or k.startswith("orig_") or k.startswith("filters_hash_")]
@@ -528,7 +527,6 @@ if df_raw.empty:
 session_key = f"orig_{selected_col_id}"
 working_key = f"working_{selected_col_id}"
 
-# Koleksiyon ürün adedi değişmişse (ürün silindiğinde/eklendiğinde) otomatik hafızayı yenile
 if (session_key not in st.session_state) or (len(st.session_state[session_key]) != len(df_raw)):
     df_backup = df_raw.copy()
     df_backup["Mevcut Sıra"] = df_backup.index + 1
@@ -748,338 +746,95 @@ m5.metric("Tükenen (0 Stok)", len(df_sorted[df_sorted["total_stock"] <= 0]))
 
 st.divider()
 
-# ==================== GÖRSEL IZGARA & HIZLI MANUEL TAŞIMA ====================
-st.subheader("🎨 Akıllı Görsel Vitrin (Sortmax Modeli)")
+# ==================== HIZLI ARAMA & MANUEL SIRALAMA PANELİ ====================
+st.subheader("📋 Sıralama Tablosu & Hızlı Manuel Kontrol")
 
-c_srch, c_view = st.columns([3, 1])
-with c_srch:
-    filter_q = st.text_input("🔍 Vitrinde Ürün / Model Ara (Örn: Aliza, Seyseller, Takım):", placeholder="Model veya renk aratıp sırasını bulabilirsiniz...")
-with c_view:
-    view_mode = st.radio("Görünüm Modu:", ["🎨 Görsel Vitrin (Sortmax)", "📋 Klasik Tablo"], horizontal=True)
+search_col, view_col = st.columns([3, 1])
+with search_col:
+    table_search_query = st.text_input("🔍 Vitrinde Ürün / Model Ara (Örn: Aliza, Miyon, Takım):", placeholder="Ürün adı veya SKU yazarak anında bulun...")
 
-# Arama Filtrelemesi
-grid_df = df_sorted.copy()
-if filter_q:
-    fq = filter_q.strip().lower()
-    grid_df = grid_df[grid_df["title"].str.lower().str.contains(fq) | grid_df["sku"].str.lower().str.contains(fq)]
+with view_col:
+    view_mode = st.radio("Görünüm Modu:", ["📋 Klasik Tablo", "🔀 Sürükle-Bırak Vitrin"], horizontal=True)
 
-# ==================== 🚀 HEDEF SIRAYA TAŞIMA BAR ====================
-search_options = [f"#{r['Planlanan Sıra']} - {r['title']} ({r['color']})" for _, r in grid_df.iterrows()]
+if table_search_query:
+    query_str = table_search_query.strip().lower()
+    view_df = df_sorted[df_sorted["title"].str.lower().str.contains(query_str) | df_sorted["sku"].str.lower().str.contains(query_str)].copy()
+else:
+    view_df = df_sorted.copy()
 
-t_c1, t_c2, t_c3 = st.columns([3, 1, 1.2])
-with t_c1:
-    selected_move_items = st.multiselect(
-        "📌 Taşınacak Ürün(ler)i Seçin:",
-        options=search_options,
-        placeholder="Taşımak istediğiniz ürünü seçin..."
-    )
-with t_c2:
-    new_target_pos = st.number_input("Hedef Sıra No:", min_value=1, max_value=len(df_sorted), value=1)
-with t_c3:
-    st.write("")
-    st.write("")
-    if st.button("🚀 Hedef Sıraya Taşı", type="primary", use_container_width=True):
-        if selected_move_items:
-            ranks_to_move = [int(item.split(" - ")[0].replace("#", "")) for item in selected_move_items]
-            curr = st.session_state[working_key].copy().reset_index(drop=True)
-            curr["Planlanan Sıra"] = curr.index + 1
-            
-            chosen_rows = curr[curr["Planlanan Sıra"].isin(ranks_to_move)]
-            remaining_rows = curr[~curr["Planlanan Sıra"].isin(ranks_to_move)]
-            
-            insert_idx = max(0, min(new_target_pos - 1, len(remaining_rows)))
-            new_full_df = pd.concat([
-                remaining_rows.iloc[:insert_idx],
-                chosen_rows,
-                remaining_rows.iloc[insert_idx:]
-            ]).reset_index(drop=True)
-            
-            st.session_state[working_key] = new_full_df
-            st.success(f"✅ Seçilen ürün(ler) başarıyla {new_target_pos}. sıraya yerleştirildi!")
-            st.rerun()
-        else:
-            st.warning("Lütfen taşınacak en az bir ürün seçin.")
-
-# ==================== 🧲 SÜRÜKLE-BIRAK KÖPRÜSÜ (KESİNLEŞTİRME PANELİ) ====================
-with st.expander("💾 Sürükle-Bırak İle Yaptığım Sırayı Kesinleştir & Tabloya Kaydet", expanded=True):
-    st.caption("Aşağıdaki kartları fareyle sürükleyip yerlerini değiştirdikten sonra, kartların hemen altındaki kutudan kopyalanan sırayı buraya yapıştırıp kaydedin. Böylece hem klasik tablo hem de Shopify canlı sırası anında eşitlenir:")
-    s_col1, s_col2 = st.columns([3.5, 1.2])
-    with s_col1:
-        sync_order_json = st.text_input("Sürüklenen Sıra Verisi:", placeholder="Kartları sürüklediğinizde alt kısımda çıkan metni buraya yapıştırın...", label_visibility="collapsed")
-    with s_col2:
-        if st.button("💾 Yeni Sırayı Tabloya Kaydet", type="primary", use_container_width=True):
-            if sync_order_json:
-                try:
-                    new_ordered_ids = json.loads(sync_order_json)
-                    curr = st.session_state[working_key].copy()
-                    id_map = {pid: idx for idx, pid in enumerate(new_ordered_ids)}
-                    curr["sort_temp"] = curr["product_id"].map(id_map).fillna(999999)
-                    new_df_saved = curr.sort_values(by="sort_temp").drop(columns=["sort_temp"]).reset_index(drop=True)
-                    st.session_state[working_key] = new_df_saved
-                    st.success("🎉 Harika! Sürüklediğiniz sıra hem görsel vitrine hem klasik tabloya mühürlendi!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Sıralama verisi çözülemedi: {e}")
+# ==================== 🚀 SEÇİLENLERİ HEDEFE TAŞIMA MOTORU ====================
+with st.container():
+    t_c1, t_c2, t_c3 = st.columns([3, 1, 1.2])
+    with t_c1:
+        search_options = [f"#{r['Planlanan Sıra']} - {r['title']} ({r['color']})" for _, r in view_df.iterrows()]
+        selected_move_items = st.multiselect(
+            "📌 Taşınacak Ürünü/Ürünleri Seçin (Aramadan çıkanları doğrudan seçebilirsiniz):",
+            options=search_options,
+            placeholder="Ürün seçin..."
+        )
+    with t_c2:
+        new_target_pos = st.number_input("Hedef Sıra No:", min_value=1, max_value=len(df_sorted), value=1)
+    with t_c3:
+        st.write("")
+        st.write("")
+        if st.button("🚀 Hedef Sıraya Taşı", type="primary", use_container_width=True):
+            if selected_move_items:
+                ranks_to_move = [int(item.split(" - ")[0].replace("#", "")) for item in selected_move_items]
+                curr = st.session_state[working_key].copy().reset_index(drop=True)
+                curr["Planlanan Sıra"] = curr.index + 1
+                
+                chosen_rows = curr[curr["Planlanan Sıra"].isin(ranks_to_move)]
+                remaining_rows = curr[~curr["Planlanan Sıra"].isin(ranks_to_move)]
+                
+                insert_idx = max(0, min(new_target_pos - 1, len(remaining_rows)))
+                new_full_df = pd.concat([
+                    remaining_rows.iloc[:insert_idx],
+                    chosen_rows,
+                    remaining_rows.iloc[insert_idx:]
+                ]).reset_index(drop=True)
+                
+                st.session_state[working_key] = new_full_df
+                st.success(f"✅ Seçilen ürün(ler) başarıyla {new_target_pos}. sıraya yerleştirildi!")
+                st.rerun()
             else:
-                st.warning("Lütfen önce aşağıdaki sürükleme kutusundaki veriyi yapıştırın.")
+                st.warning("Lütfen taşınacak en az bir ürün seçin.")
 
-st.caption("💡 **Sortmax Tarzı Kullanım:** Kartları fareyle istediğiniz yere sürükleyin. Sürükleme bittiğinde sol üstteki numaralar `#1, #2, #3...` diye anında güncellenir.")
-
-if view_mode == "🎨 Görsel Vitrin (Sortmax)":
-    cards_data = []
-    for idx, row in grid_df.iterrows():
-        cards_data.append({
-            "id": row["product_id"],
-            "title": row["title"],
-            "image": row["image"] if row["image"] else "",
-            "color": row["color"],
-            "stock": int(row["total_stock"]),
-            "status": row["size_status"],
-            "season": row["season"],
-            "discount": float(row["discount_pct"]),
-            "actual_rank": int(row["Planlanan Sıra"])
-        })
+# ==================== GÖRÜNÜM ALANI ====================
+if view_mode == "🔀 Sürükle-Bırak Vitrin":
+    st.info("💡 **Nasıl Kullanılır?:** Aşağıdaki ürünleri fareyle tutup istediğiniz sıraya sürükleyin. Bıraktığınız an sıra anında kaydedilir ve aşağıdaki 'Shopify'a Gönder' butonu bu yeni sırayı canlıya alır.")
     
-    cards_json = json.dumps(cards_data)
+    # Listenin akıcı çalışması için ilk 100 ürünü sürükle-bırak vitrinine aktarır
+    limit = min(100, len(df_sorted))
+    subset = df_sorted.iloc[:limit]
     
-    html_code = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
-        <style>
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                margin: 0;
-                padding: 4px;
-                background: #f8fafc;
-            }}
-            .grid-container {{
-                display: grid;
-                grid-template-columns: repeat(4, 1fr);
-                gap: 8px;
-                padding: 4px;
-            }}
-            .product-card {{
-                background: #ffffff;
-                border: 1px solid #e2e8f0;
-                border-radius: 6px;
-                overflow: hidden;
-                box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-                cursor: grab;
-                transition: transform 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease;
-                display: flex;
-                flex-direction: column;
-                user-select: none;
-                position: relative;
-            }}
-            .product-card:active {{
-                cursor: grabbing;
-            }}
-            .product-card.sortable-selected {{
-                border: 2px solid #2563eb !important;
-                background: #eff6ff !important;
-                box-shadow: 0 2px 8px rgba(37,99,235,0.25) !important;
-            }}
-            .img-container {{
-                width: 100%;
-                height: 125px;
-                background: #f1f5f9;
-                position: relative;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                overflow: hidden;
-            }}
-            .img-container img {{
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-                object-position: center top;
-            }}
-            .badge-order {{
-                position: absolute;
-                top: 4px;
-                left: 4px;
-                background: rgba(15, 23, 42, 0.9);
-                color: #ffffff;
-                font-size: 10px;
-                font-weight: 700;
-                padding: 2px 6px;
-                border-radius: 4px;
-                z-index: 2;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-            }}
-            .badge-discount {{
-                position: absolute;
-                top: 4px;
-                right: 4px;
-                background: #e11d48;
-                color: #ffffff;
-                font-size: 9px;
-                font-weight: 700;
-                padding: 2px 5px;
-                border-radius: 3px;
-                z-index: 2;
-            }}
-            .card-details {{
-                padding: 5px 6px;
-                display: flex;
-                flex-direction: column;
-                gap: 3px;
-                background: #ffffff;
-            }}
-            .product-title {{
-                font-size: 10px;
-                font-weight: 600;
-                color: #1e293b;
-                line-height: 1.15;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }}
-            .tags-row {{
-                display: flex;
-                flex-wrap: wrap;
-                gap: 2px;
-                align-items: center;
-            }}
-            .tag {{
-                font-size: 8.5px;
-                font-weight: 600;
-                padding: 1px 4px;
-                border-radius: 3px;
-                line-height: 1.1;
-                white-space: nowrap;
-            }}
-            .tag-stock {{ background: #dcfce7; color: #166534; }}
-            .tag-color {{ background: #f1f5f9; color: #475569; }}
-            .tag-status-tam {{ background: #e0f2fe; color: #0369a1; }}
-            .tag-status-kirik {{ background: #fef3c7; color: #b45309; }}
-            .tag-status-tukendi {{ background: #fee2e2; color: #b91c1c; }}
-            .sync-panel {{
-                margin-top: 15px;
-                padding: 10px;
-                background: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }}
-            .sync-input {{
-                flex: 1;
-                font-size: 11px;
-                padding: 6px 8px;
-                border: 1px solid #94a3b8;
-                border-radius: 4px;
-                background: #f8fafc;
-            }}
-            .sync-btn {{
-                background: #2563eb;
-                color: #fff;
-                font-weight: 600;
-                font-size: 11px;
-                padding: 6px 12px;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-            }}
-        </style>
-    </head>
-    <body>
-        <div id="productGrid" class="grid-container"></div>
-        
-        <div class="sync-panel">
-            <span style="font-size:11px; font-weight:700; color:#334155;">📋 Sürüklenen Yeni Sıra:</span>
-            <input type="text" id="syncBox" class="sync-input" readonly placeholder="Kartları sürüklediğinizde bu kutu otomatik dolar..." />
-            <button class="sync-btn" onclick="copyAndAlert()">📋 Sırayı Kopyala</button>
-        </div>
-
-        <script>
-            const data = {cards_json};
-            const grid = document.getElementById('productGrid');
-            const syncBox = document.getElementById('syncBox');
-            
-            data.forEach((p) => {{
-                const card = document.createElement('div');
-                card.className = 'product-card';
-                card.dataset.id = p.id;
-                
-                let statusClass = 'tag-status-tam';
-                if(p.status === 'Kırık Beden' || p.status === 'Tek Beden') statusClass = 'tag-status-kirik';
-                if(p.status === 'Tükendi') statusClass = 'tag-status-tukendi';
-                
-                let discountBadge = p.discount > 0 ? `<span class="badge-discount">%${{p.discount}}</span>` : '';
-                
-                card.innerHTML = `
-                    <div class="img-container">
-                        <span class="badge-order">#${{p.actual_rank}}</span>
-                        ${{discountBadge}}
-                        ${{p.image ? `<img src="${{p.image}}" loading="lazy" />` : '<span style="color:#94a3b8;font-size:10px;">Görsel Yok</span>'}}
-                    </div>
-                    <div class="card-details">
-                        <div class="product-title" title="${{p.title}}">${{p.title}}</div>
-                        <div class="tags-row">
-                            <span class="tag tag-stock">📦 ${{p.stock}}</span>
-                            <span class="tag tag-color">🎨 ${{p.color}}</span>
-                            <span class="tag ${{statusClass}}">${{p.status}}</span>
-                        </div>
-                    </div>
-                `;
-                grid.appendChild(card);
-            }});
-            
-            function updateOrder() {{
-                const cards = Array.from(grid.getElementsByClassName('product-card'));
-                const orderedIds = [];
-                cards.forEach((c, i) => {{
-                    const badge = c.querySelector('.badge-order');
-                    if (badge) badge.innerText = '#' + (i + 1);
-                    orderedIds.push(c.dataset.id);
-                }});
-                syncBox.value = JSON.stringify(orderedIds);
-            }}
-
-            function copyAndAlert() {{
-                if(!syncBox.value) {{
-                    alert('Lütfen önce en az bir kartı sürükleyerek yerini değiştirin.');
-                    return;
-                }}
-                navigator.clipboard.writeText(syncBox.value).then(() => {{
-                    alert('✅ Yeni sıra kopyalandı! Şimdi yukarıdaki "Yeni Sırayı Tabloya Kaydet" kutusuna yapıştırıp butona basın.');
-                }});
-            }}
-
-            new Sortable(grid, {{
-                multiDrag: true,
-                selectedClass: 'sortable-selected',
-                multiDragKey: 'Control',
-                fallbackTolerance: 3,
-                animation: 120,
-                ghostClass: 'sortable-ghost',
-                onEnd: function() {{
-                    updateOrder();
-                }}
-            }});
-        </script>
-    </body>
-    </html>
-    """
+    sortable_items = [
+        f"#{idx+1} | {r['title']} | Renk: {r['color']} | Stok: {r['total_stock']} | {r['size_status']} [ID:{r['product_id']}]"
+        for idx, r in subset.iterrows()
+    ]
     
-    estimated_height = max(550, (len(cards_data) // 4 + 1) * 180)
-    components.html(html_code, height=min(estimated_height, 1300), scrolling=True)
+    new_sorted = sort_items(sortable_items)
+    
+    # Kullanıcı bir kartı sürükleyip bıraktıysa
+    if new_sorted != sortable_items:
+        new_ids = [re.search(r'\[ID:(.*?)\]', it).group(1) for it in new_sorted]
+        curr = st.session_state[working_key].copy()
+        id_order = {pid: idx for idx, pid in enumerate(new_ids)}
+        curr["drag_pos"] = curr["product_id"].map(id_order).fillna(999999)
+        updated = curr.sort_values(by="drag_pos").drop(columns=["drag_pos"]).reset_index(drop=True)
+        st.session_state[working_key] = updated
+        st.rerun()
 
 else:
-    # 📋 Klasik Tablo Modu
+    # 📋 Klasik Tablo Modu (Alıştığın birebir tablo)
     display_cols = [
         "Planlanan Sıra", "image", "Mevcut Sıra", "title", "sku", "color", "season", 
         "total_stock", "active_sizes", "size_status", "discount_pct", "days_old", "price"
     ]
+
     st.dataframe(
-        grid_df[display_cols],
+        view_df[display_cols],
         use_container_width=True,
-        height=450,
+        height=480,
         column_config={
             "image": st.column_config.ImageColumn("Görsel", width="small"),
             "Planlanan Sıra": st.column_config.NumberColumn("Planlanan", width="small"),
@@ -1114,4 +869,4 @@ with col_btn:
                 st.error("Sıralama aktarılırken bir hata oluştu.")
 
 with col_info:
-    st.info("💡 Butona bastığında mağazadaki koleksiyon vitrini buradaki sıralamaya göre anında Shopify'da güncellenir.")
+    st.info("💡 Butona bastığında mağazadaki koleksiyon vitrini buradaki 'Planlanan Sıra' numarasına göre anında Shopify'da güncellenir.")
