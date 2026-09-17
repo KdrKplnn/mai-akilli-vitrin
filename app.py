@@ -533,6 +533,29 @@ if (session_key not in st.session_state) or (len(st.session_state[session_key]) 
     st.session_state[session_key] = df_backup
     st.session_state[working_key] = df_backup.copy()
 
+# ==================== ⚡ KART ÜZERİNDEN ENTER İLE TAŞIMA KÖPRÜSÜ ====================
+qp = st.query_params
+if "move_id" in qp and "to_pos" in qp:
+    try:
+        m_id = qp["move_id"]
+        to_p = int(qp["to_pos"])
+        curr = st.session_state[working_key].copy().reset_index(drop=True)
+        chosen_row = curr[curr["product_id"] == m_id]
+        remaining = curr[curr["product_id"] != m_id]
+        
+        if not chosen_row.empty:
+            ins_idx = max(0, min(to_p - 1, len(remaining)))
+            new_df = pd.concat([
+                remaining.iloc[:ins_idx],
+                chosen_row,
+                remaining.iloc[ins_idx:]
+            ]).reset_index(drop=True)
+            st.session_state[working_key] = new_df
+    except Exception:
+        pass
+    st.query_params.clear()
+    st.rerun()
+
 st.sidebar.divider()
 
 # --- 🚀 HIZLI STRATEJİLER ---
@@ -667,6 +690,7 @@ any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
 current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{f_recent_stock}_{f_season}_{selected_priority_seasons}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
+# Sadece sol filtrelerden biri değiştiğinde baştan sırala
 if st.session_state.get(last_filters_key) != current_filters_hash:
     st.session_state[last_filters_key] = current_filters_hash
     
@@ -796,7 +820,8 @@ with t_c3:
         else:
             st.warning("Lütfen taşınacak en az bir ürün seçin.")
 
-# ==================== GÖRSEL VİTRİN VE RESMİ İKİ YÖNLÜ STREAMLIT COMPONENT ====================
+st.caption("💡 **Kullanım:** Kartların sol üstündeki **# kutucuğuna istediğiniz sırayı yazıp Enter'a basın**. Ürün doğrudan o sıraya taşınır, hem görsel vitrinde hem klasik tabloda sırası güncellenir.")
+
 if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     cards_data = []
     for idx, row in grid_df.iterrows():
@@ -814,75 +839,32 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     
     cards_json = json.dumps(cards_data)
     
-    # Doğrudan Streamlit Component API'sine mesaj basan HTML
     html_code = f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
         <style>
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 margin: 0;
                 padding: 4px;
-                background: #0e1117;
-                color: #ffffff;
-            }}
-            .action-bar {{
-                position: sticky;
-                top: 0;
-                background: #1e293b;
-                padding: 10px 14px;
-                border: 1px solid #334155;
-                border-radius: 8px;
-                margin-bottom: 12px;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-                z-index: 100;
-            }}
-            .save-btn {{
-                background: #ff4b4b;
-                color: #ffffff;
-                font-weight: 700;
-                font-size: 13px;
-                padding: 8px 18px;
-                border: none;
-                border-radius: 6px;
-                cursor: pointer;
-                transition: transform 0.1s ease, background 0.15s ease;
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-            }}
-            .save-btn:hover {{
-                background: #e03131;
-            }}
-            .save-btn:active {{
-                transform: scale(0.97);
+                background: #f8fafc;
             }}
             .grid-container {{
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
                 gap: 8px;
-                padding: 2px;
+                padding: 4px;
             }}
             .product-card {{
                 background: #ffffff;
-                border: 1px solid #cbd5e1;
+                border: 1px solid #e2e8f0;
                 border-radius: 6px;
                 overflow: hidden;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-                cursor: grab;
-                transition: transform 0.1s ease;
+                box-shadow: 0 1px 2px rgba(0,0,0,0.05);
                 display: flex;
                 flex-direction: column;
-                user-select: none;
                 position: relative;
-            }}
-            .product-card:active {{
-                cursor: grabbing;
             }}
             .img-container {{
                 width: 100%;
@@ -911,7 +893,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 padding: 2px 4px;
                 border-radius: 4px;
                 border: 1px solid rgba(255,255,255,0.4);
-                width: 44px;
+                width: 48px;
                 text-align: center;
                 cursor: text;
                 z-index: 5;
@@ -971,33 +953,9 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
         </style>
     </head>
     <body>
-        <div class="action-bar">
-            <span style="font-size: 12px; color: #cbd5e1; font-weight: 600;">
-                💡 Kartları sürükleyin veya sol üstteki kutuya sıra yazıp Enter'a basın.
-            </span>
-            <button class="save-btn" id="mainSaveBtn" onclick="saveOrderToStreamlit()">
-                💾 Vitrin Değişikliklerini Tabloya Aktar & Kesinleştir
-            </button>
-        </div>
-
         <div id="productGrid" class="grid-container"></div>
 
         <script>
-            // Streamlit resmi Component mesajlaşma protokolü
-            function sendToStreamlit(value) {{
-                window.parent.postMessage({{
-                    type: "streamlit:setComponentValue",
-                    value: value
-                }}, "*");
-            }}
-
-            function setFrameHeight() {{
-                window.parent.postMessage({{
-                    type: "streamlit:setFrameHeight",
-                    height: document.body.scrollHeight + 30
-                }}, "*");
-            }}
-
             const data = {cards_json};
             const grid = document.getElementById('productGrid');
             
@@ -1014,7 +972,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 
                 card.innerHTML = `
                     <div class="img-container">
-                        <input type="text" class="badge-order-input" value="#${{p.actual_rank}}" title="Yeni sıra numarasını yazıp Enter'a basın" onclick="event.stopPropagation();" />
+                        <input type="text" class="badge-order-input" value="#${{p.actual_rank}}" title="Yeni sıra numarasını yazıp Enter'a basın" />
                         ${{discountBadge}}
                         ${{p.image ? `<img src="${{p.image}}" loading="lazy" />` : '<span style="color:#94a3b8;font-size:10px;">Görsel Yok</span>'}}
                     </div>
@@ -1028,89 +986,30 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                     </div>
                 `;
                 
-                // Kutudan numara yazıp Enter basınca taşıma
+                // Kutucuğa hedef sıra yazıp Enter'a basıldığında tetikleme
                 const inp = card.querySelector('.badge-order-input');
                 inp.addEventListener('keydown', function(e) {{
                     if (e.key === 'Enter') {{
                         e.preventDefault();
                         let targetNum = parseInt(inp.value.replace('#', '').trim());
                         if (!isNaN(targetNum) && targetNum > 0) {{
-                            const allCards = Array.from(grid.getElementsByClassName('product-card'));
-                            const currentIndex = allCards.indexOf(card);
-                            let targetIndex = Math.min(Math.max(targetNum - 1, 0), allCards.length - 1);
-                            
-                            if (targetIndex !== currentIndex) {{
-                                if (targetIndex >= allCards.length - 1) {{
-                                    grid.appendChild(card);
-                                }} else if (targetIndex > currentIndex) {{
-                                    grid.insertBefore(card, allCards[targetIndex].nextSibling);
-                                }} else {{
-                                    grid.insertBefore(card, allCards[targetIndex]);
-                                }}
-                                refreshBadges();
-                            }}
+                            const parentUrl = new URL(window.parent.location.href);
+                            parentUrl.searchParams.set('move_id', p.id);
+                            parentUrl.searchParams.set('to_pos', targetNum);
+                            window.parent.location.href = parentUrl.toString();
                         }}
                     }}
                 }});
                 
                 grid.appendChild(card);
             }});
-            
-            function refreshBadges() {{
-                const cards = Array.from(grid.getElementsByClassName('product-card'));
-                cards.forEach((c, i) => {{
-                    const inp = c.querySelector('.badge-order-input');
-                    if (inp) inp.value = '#' + (i + 1);
-                }});
-            }}
-
-            function saveOrderToStreamlit() {{
-                const btn = document.getElementById('mainSaveBtn');
-                btn.innerText = '⏳ Kaydediliyor...';
-                btn.style.background = '#16a34a';
-                
-                const cards = Array.from(grid.getElementsByClassName('product-card'));
-                const orderedIds = cards.map(c => c.dataset.id);
-                
-                // Güvenlik duvarını aşan resmi Streamlit postMessage köprüsü
-                sendToStreamlit(orderedIds);
-            }}
-
-            new Sortable(grid, {{
-                multiDrag: true,
-                selectedClass: 'sortable-selected',
-                multiDragKey: 'Control',
-                fallbackTolerance: 3,
-                animation: 120,
-                ghostClass: 'sortable-ghost',
-                onEnd: function() {{
-                    refreshBadges();
-                }}
-            }});
-
-            window.onload = function() {{
-                setFrameHeight();
-            }};
         </script>
     </body>
     </html>
     """
     
-    # Resmi iki yönlü component
-    visual_sorter_component = components.declare_component(
-        "sortmax_native_grid",
-        url=None
-    )
-    
-    # Component çağrısı - butona basıldığında new_order doğrudan list olarak döner
-    component_response = visual_sorter_component(
-        default=None,
-        key=f"native_sort_{selected_col_id}"
-    ) if False else None  # Fallback mantığıyla doğrudan html render'a bağlıyoruz:
-
-    # Streamlit güvenli iframe mesaj dinleyicisi
     estimated_height = max(550, (len(cards_data) // 4 + 1) * 180)
-    returned_order = components.html(html_code, height=min(estimated_height, 1300), scrolling=True)
+    components.html(html_code, height=min(estimated_height, 1300), scrolling=True)
 
 else:
     # 📋 Klasik Tablo Modu
