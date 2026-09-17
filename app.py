@@ -503,7 +503,6 @@ selected_col_label = st.sidebar.selectbox(
     help="Kutuya tıklayıp aradığınız koleksiyonun adını doğrudan klavyeden yazabilirsiniz."
 )
 
-# Canlı verileri sıfırlama butonu
 if st.sidebar.button("⚡ Canlı Verileri Yenile", use_container_width=True):
     st.cache_data.clear()
     keys_to_clear = [k for k in list(st.session_state.keys()) if k.startswith("working_") or k.startswith("orig_") or k.startswith("filters_hash_")]
@@ -528,7 +527,6 @@ if df_raw.empty:
 session_key = f"orig_{selected_col_id}"
 working_key = f"working_{selected_col_id}"
 
-# Koleksiyon ürün adedi değişmişse oturumu güncelle
 if (session_key not in st.session_state) or (len(st.session_state[session_key]) != len(df_raw)):
     df_backup = df_raw.copy()
     df_backup["Mevcut Sıra"] = df_backup.index + 1
@@ -800,33 +798,30 @@ with t_c3:
         else:
             st.warning("Lütfen taşınacak en az bir ürün seçin.")
 
-# ==================== 💾 TOPLU DEĞİŞİKLİKLERİ TABLOYA AKTARMA KÖPRÜSÜ ====================
-st.markdown("---")
-b_c1, b_c2 = st.columns([3.5, 1.5])
-with b_c1:
-    sync_order_json = st.text_input(
-        "Sürüklenen Sıra Verisi:",
-        placeholder="Kartları sürüklediğinizde veya kutudan sıra numarası girdiğinizde alt paneldeki metni buraya yapıştırın...",
-        label_visibility="collapsed"
-    )
-with b_c2:
-    if st.button("💾 Değişiklikleri Tabloya Aktar & Kaydet", type="primary", use_container_width=True):
-        if sync_order_json:
-            try:
-                new_ordered_ids = json.loads(sync_order_json)
-                curr = st.session_state[working_key].copy()
-                id_map = {pid: idx for idx, pid in enumerate(new_ordered_ids)}
-                curr["sort_temp"] = curr["product_id"].map(id_map).fillna(999999)
-                new_df_saved = curr.sort_values(by="sort_temp").drop(columns=["sort_temp"]).reset_index(drop=True)
-                st.session_state[working_key] = new_df_saved
-                st.success("🎉 Harika! Görsel vitrinde yaptığınız tüm değişiklikler klasik tabloya ve Shopify aktarım sırasına mühürlendi!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Sıralama verisi çözülemedi: {e}")
-        else:
-            st.warning("Lütfen önce aşağıdaki 'Sırayı Kopyala' butonuna basarak güncel sırayı kutuya yapıştırın.")
+# ==================== 🧲 SÜRÜKLE-BIRAK KÖPRÜSÜ (KESİNLEŞTİRME PANELİ) ====================
+with st.expander("💾 Sürükle-Bırak İle Yaptığım Sırayı Kesinleştir & Tabloya Kaydet", expanded=True):
+    st.caption("Aşağıdaki kartları fareyle sürükleyip yerlerini değiştirdikten sonra, en üstteki bardan kopyalanan sırayı buraya yapıştırıp kaydedin:")
+    s_col1, s_col2 = st.columns([3.5, 1.2])
+    with s_col1:
+        sync_order_json = st.text_input("Sürüklenen Sıra Verisi:", placeholder="Kartları sürüklediğinizde üst barda çıkan metni buraya yapıştırın...", label_visibility="collapsed")
+    with s_col2:
+        if st.button("💾 Yeni Sırayı Tabloya Kaydet", type="primary", use_container_width=True):
+            if sync_order_json:
+                try:
+                    new_ordered_ids = json.loads(sync_order_json)
+                    curr = st.session_state[working_key].copy()
+                    id_map = {pid: idx for idx, pid in enumerate(new_ordered_ids)}
+                    curr["sort_temp"] = curr["product_id"].map(id_map).fillna(999999)
+                    new_df_saved = curr.sort_values(by="sort_temp").drop(columns=["sort_temp"]).reset_index(drop=True)
+                    st.session_state[working_key] = new_df_saved
+                    st.success("🎉 Harika! Sürüklediğiniz sıra hem görsel vitrine hem klasik tabloya mühürlendi!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Sıralama verisi çözülemedi: {e}")
+            else:
+                st.warning("Lütfen önce üst bardaki 'Sırayı Kopyala' butonuna basıp veriyi yapıştırın.")
 
-st.caption("💡 **Sortmax Tarzı Kullanım:** Kartların sol üstündeki **# kutucuğuna istediğiniz sırayı yazıp Enter'a basabilir** veya fareyle tutup istediğiniz yere sürükleyebilirsiniz. Sayfa siz tüm değişiklikleri bitirip yukarıdaki mavi butona basana kadar **asla kendini yenilemez**, işinizi bölmez.")
+st.caption("💡 **Sortmax Tarzı Kullanım:** Kartları fareyle istediğiniz yere sürükleyin veya sol üstteki kutucuktan sıra değiştirin. Sıra otomatik üst barda güncellenecektir.")
 
 if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     cards_data = []
@@ -856,6 +851,45 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 margin: 0;
                 padding: 4px;
                 background: #f8fafc;
+            }}
+            /* ÜSTTE SABİTLENEN (STICKY) KÖPRÜ BARI */
+            .sync-panel-top {{
+                position: sticky;
+                top: 0;
+                background: #ffffff;
+                padding: 10px 14px;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                margin-bottom: 12px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+                z-index: 9999;
+            }}
+            .sync-input {{
+                flex: 1;
+                font-size: 11px;
+                padding: 7px 10px;
+                border: 1px solid #94a3b8;
+                border-radius: 4px;
+                background: #f8fafc;
+            }}
+            .sync-btn {{
+                background: #2563eb;
+                color: #fff;
+                font-weight: 600;
+                font-size: 12px;
+                padding: 7px 14px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+            }}
+            .sync-btn:hover {{
+                background: #1d4ed8;
             }}
             .grid-container {{
                 display: grid;
@@ -968,44 +1002,17 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
             .tag-status-tam {{ background: #e0f2fe; color: #0369a1; }}
             .tag-status-kirik {{ background: #fef3c7; color: #b45309; }}
             .tag-status-tukendi {{ background: #fee2e2; color: #b91c1c; }}
-            .sync-panel {{
-                margin-top: 15px;
-                padding: 10px;
-                background: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }}
-            .sync-input {{
-                flex: 1;
-                font-size: 11px;
-                padding: 6px 8px;
-                border: 1px solid #94a3b8;
-                border-radius: 4px;
-                background: #f8fafc;
-            }}
-            .sync-btn {{
-                background: #2563eb;
-                color: #fff;
-                font-weight: 600;
-                font-size: 11px;
-                padding: 6px 12px;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-            }}
         </style>
     </head>
     <body>
-        <div id="productGrid" class="grid-container"></div>
-        
-        <div class="sync-panel">
-            <span style="font-size:11px; font-weight:700; color:#334155;">📋 Sürüklenen / Değişen Sıra:</span>
-            <input type="text" id="syncBox" class="sync-input" readonly placeholder="Değişiklik yaptıkça bu kutu otomatik güncellenir..." />
-            <button class="sync-btn" onclick="copyAndNotify()">📋 Sırayı Kopyala</button>
+        <!-- EN TEPEDE STICKY DURAN SIRALAMA BARI -->
+        <div class="sync-panel-top">
+            <span style="font-size:12px; font-weight:700; color:#1e293b; white-space:nowrap;">📋 Sürüklenen / Değişen Sıra:</span>
+            <input type="text" id="syncBox" class="sync-input" readonly placeholder="Kartları sürüklediğinizde bu kutu otomatik güncellenir..." />
+            <button class="sync-btn" onclick="copyAndAlert()">📋 Sırayı Kopyala</button>
         </div>
+
+        <div id="productGrid" class="grid-container"></div>
 
         <script>
             const data = {cards_json};
@@ -1078,12 +1085,12 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                 syncBox.value = JSON.stringify(orderedIds);
             }}
 
-            function copyAndNotify() {{
+            function copyAndAlert() {{
                 if(!syncBox.value) {{
                     updateAllBadgesAndSync();
                 }}
                 navigator.clipboard.writeText(syncBox.value).then(() => {{
-                    alert('✅ Güncel vitrin sırası kopyalandı! Şimdi yukarıdaki kutucuğa yapıştırıp "💾 Değişiklikleri Tabloya Aktar & Kaydet" butonuna basın.');
+                    alert('✅ Yeni sıra kopyalandı! Şimdi yukarıdaki "Yeni Sırayı Tabloya Kaydet" kutusuna yapıştırıp butona basın.');
                 }});
             }}
 
