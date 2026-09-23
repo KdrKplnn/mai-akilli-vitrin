@@ -154,24 +154,19 @@ def detect_season(tags_list):
         return "Kış (FW)"
     return "Multi Sezon"
 
-# --- DETAYLI KATEGORİ VE T-SHIRT TESPİTİ ---
 def detect_main_category(title, tags):
     txt = turkish_upper(str(title) + " " + " ".join([str(t) for t in tags]))
     
-    # İç Çamaşırı, Bot, Ayakkabı, Aksesuar (İlk sıralardan menedilecekler)
     if any(k in txt for k in ["SUTYEN", "KULOT", "CORAP", "IC CAMASIR", "BIKINI", "MAYO", "MAYOKINI", "TERLIK", "SANDALET", "AYAKKABI", "BOT", "CIZME", "SAPKA"]):
         return "ALT_SEGMENT"
     
-    # T-Shirt ve Kısa Kollular (1. sayfadan sonra başlatılacak grup)
     if any(k in txt for k in ["T-SHIRT", "TSHIRT", "TISORT", "TIŞÖRT", "T-SHİRT", "KISA KOL"]):
         return "TSHIRT_KISAKOL"
         
-    # Yazlık Açık Parçalar
     summer_types = ["CROP", "ASKILI", "BUSTIYER", "SORT", "KOLSUZ", "HALTER", "STRAPLEZ", "MINI", "BERMUDA", "KETEN"]
     if any(k in txt for k in summer_types) and not any(k in txt for k in ["ESOFMAN"]):
         return "YAZLIK_ACIK"
         
-    # Kışlık Ana Gruplar
     if any(k in txt for k in ["ESOFMAN", "SWEATPANTS", "JOGGER", "HOODIE"]):
         return "ESOFMAN_TAKIM"
     if any(k in txt for k in ["KAZAK", "TRIKO", "HIRKA", "SWEATSHIRT", "POLAR"]):
@@ -189,7 +184,7 @@ def detect_main_category(title, tags):
         
     return "DIGER_STANDART"
 
-# --- 2. ÜRÜNLERİ, GÖRSELLERİ, CANLI SIRAYI VE BAĞLI KOLEKSİYONLARI ÇEKME ---
+# --- 2. ÜRÜNLERİ, GÖRSELLERİ VE VERİLERİ ÇEKME ---
 @st.cache_data(ttl=120)
 def get_collection_data_fast(collection_id):
     products = []
@@ -416,37 +411,31 @@ def diversify_grid_4(df_in, lookback=4):
     result.extend(out_of_stock)
     return pd.DataFrame(result)
 
-# --- 🍂 T-SHIRT 1. SAYFA KORUMA FONKSİYONU ---
-def apply_page1_protection_for_tshirts(df_in, page_size=24):
+# --- ❄️ KIŞ VE MULTI SEZON ARASI ZORUNLU DÖNÜŞÜM (INTERLEAVING) MOTORU ---
+def interleave_fw_and_multi(df_in):
     in_stock = df_in[df_in["total_stock"] > 0].copy()
     out_of_stock = df_in[df_in["total_stock"] <= 0].copy()
     
-    # Tişört/Kısa Kol olanlar ile Kışlık/Diğer parçaları ayır
-    tshirts = in_stock[in_stock["main_category"] == "TSHIRT_KISAKOL"].to_dict("records")
-    non_tshirts = in_stock[in_stock["main_category"] != "TSHIRT_KISAKOL"].to_dict("records")
+    # 1. Kış (FW) Havuzu (Kendi içinde en yüksek skorlular en başta)
+    fw_pool = in_stock[(in_stock["season"] == "Kış (FW)") & (~in_stock["main_category"].isin(["ALT_SEGMENT", "YAZLIK_ACIK"]))].sort_values(by="Hesaplanan Skor", ascending=False).to_dict("records")
     
-    # 1. Sayfa (ilk 24 ürün) kesinlikle tişört olamaz
-    page1_items = non_tshirts[:page_size]
-    remaining_non_tshirts = non_tshirts[page_size:]
+    # 2. Multi Sezon Kışa Uygun Havuz (Kendi içinde en yüksek skorlular en başta)
+    multi_pool = in_stock[(in_stock["season"] == "Multi Sezon") & (~in_stock["main_category"].isin(["ALT_SEGMENT", "YAZLIK_ACIK", "TSHIRT_KISAKOL"]))].sort_values(by="Hesaplanan Skor", ascending=False).to_dict("records")
     
-    # 2. Sayfadan itibaren tişörtleri ve kalan parçaları harmanla
-    after_page1 = []
-    # 2. ve 3. sayfalara tişörtleri aralıklarla serpiştir
-    t_idx = 0
-    for item in remaining_non_tshirts:
-        after_page1.append(item)
-        # Her 2-3 üründe bir tişört serpiştir (varsa)
-        if t_idx < len(tshirts) and len(after_page1) % 3 == 0:
-            after_page1.append(tshirts[t_idx])
-            t_idx += 1
+    # 3. Kalan Diğerleri (Yazlıklar, Tişörtler, İç Çamaşırları)
+    handled_ids = set([x["product_id"] for x in fw_pool] + [x["product_id"] for x in multi_pool])
+    remaining_pool = in_stock[~in_stock["product_id"].isin(handled_ids)].sort_values(by="Hesaplanan Skor", ascending=False).to_dict("records")
+    
+    # Birebir Dönüşümlü Harmanlama (1 Kış - 1 Multi - 1 Kış - 1 Multi)
+    mixed_front = []
+    while fw_pool or multi_pool:
+        if fw_pool:
+            mixed_front.append(fw_pool.pop(0))
+        if multi_pool:
+            mixed_front.append(multi_pool.pop(0))
             
-    # Kalan tüm tişörtleri ekle
-    while t_idx < len(tshirts):
-        after_page1.append(tshirts[t_idx])
-        t_idx += 1
-        
-    final_list = page1_items + after_page1 + out_of_stock.to_dict("records")
-    return pd.DataFrame(final_list)
+    final_records = mixed_front + remaining_pool + out_of_stock.to_dict("records")
+    return pd.DataFrame(final_records)
 
 # --- 4. CANLIYA ALMA MUTASYONU ---
 def reorder_shopify_collection(collection_id, product_ids, show_progress=True):
@@ -639,7 +628,7 @@ f_new = st.sidebar.checkbox("✨ En Son Eklenenler Öne Çıksın (Dinamik)", va
 f_recent_stock = st.sidebar.checkbox("🔄 Stoğu En Son Güncellenenler Öne Çıksın", value=False)
 f_discount = st.sidebar.checkbox("🏷️ İndirimliler Öne Çıksın", value=False)
 
-f_season = st.sidebar.checkbox("❄️/☀️ Sezon Önceliği Uygula", value=False)
+f_season = st.sidebar.checkbox("❄️/☀️ Sezon Önceliği Uygula", value=True)
 selected_priority_seasons = []
 if f_season:
     selected_priority_seasons = st.sidebar.multiselect(
@@ -651,7 +640,7 @@ if f_season:
 # --- 🏷️ KOLEKSİYON ÖNCELİĞİ ---
 st.sidebar.divider()
 st.sidebar.subheader("🏷️ Koleksiyon Önceliği")
-f_collection_priority = st.sidebar.checkbox("🏷️ Seçili Koleksiyonlardaki Ürünler Öne Çıksın", value=False)
+f_collection_priority = st.sidebar.checkbox("🏷️ Seçili Koleksiyonlardaki Ürünler Öne Çıksın", value=True)
 
 all_store_collections = sorted(list(set([c["title"] for c in collections])))
 selected_priority_collections = []
@@ -659,24 +648,31 @@ if f_collection_priority:
     selected_priority_collections = st.sidebar.multiselect(
         "Öne Gelecek Koleksiyonları Belirleyin:",
         options=all_store_collections,
+        default=["New Form", "Arrival"] if ("New Form" in all_store_collections and "Arrival" in all_store_collections) else [],
         placeholder="Örn: New Form, Arrival, Triko..."
     )
 
-# --- 👕 YENİ: T-SHIRT 1. SAYFA KORUMASI ---
+# --- ❄️ YENİ: KIŞ & MULTI SEZON HARMANLAMA KURALI ---
 st.sidebar.divider()
-st.sidebar.subheader("👕 T-Shirt / Kısa Kol Konumlandırma")
-protect_page1_tshirts = st.sidebar.checkbox(
-    "🛡️ T-Shirt'leri 1. Sayfadan Koru (2. ve 3. Sayfadan Başlasın)", 
+st.sidebar.subheader("❄️ Sezon Harmanlama")
+enable_fw_multi_interleaving = st.sidebar.checkbox(
+    "🔄 Kış ve Multi Sezonu Dönüşümlü Harmanla (1 FW - 1 Multi)", 
     value=True,
-    help="T-Shirt ve kısa kollu ürünleri vitrinin ilk sayfasından (ilk 24 ürün) çıkarır, 25. sıradan itibaren 2 ve 3. sayfalara serpiştirir."
+    help="Ön sıralarda sadece Multi Sezon yığılmasını engeller. Sırayı 1 Kışlık - 1 Multi Sezon şeklinde eşit harmanlar."
+)
+
+protect_page1_tshirts = st.sidebar.checkbox(
+    "🛡️ T-Shirt'leri 1. Sayfadan Koru (2. Sayfadan Başlasın)", 
+    value=True,
+    help="T-Shirt'leri ilk 24 ürün arasından çıkarıp 2. ve 3. sayfalara öteler."
 )
 
 st.sidebar.divider()
 
 # --- VİTRİN HİJYENİ VE KORUMA ---
 st.sidebar.subheader("🛡️ Vitrin Kuralları")
-push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=False)
-enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgara Ayrıştırma", value=False)
+push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=True)
+enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgarada Model/Renk Ayrıştır", value=True)
 enable_broken_penalty = st.sidebar.checkbox("⚠️ Kırık Bedenleri Cezalandır", value=False)
 enable_single_penalty = st.sidebar.checkbox("⚠️ Tek Beden Kalanları Cezalandır", value=False)
 
@@ -752,23 +748,23 @@ def compute_combined_score(r):
         score += (r["shopify_sales_score"]) * (sales_weight / 100.0)
     if f_stock:
         score += (r["total_stock"] / max_stock) * stock_weight
-    
-    # ⚡ Dinamik Göreceli Tazelik
     if f_new:
         score += (r.get("new_arrival_score", 0.0)) * (new_weight / 100.0)
-        
-    # ⚡ Dinamik Stok Hareketi
     if f_recent_stock:
         score += (r.get("recent_stock_score", 0.0)) * (recent_stock_weight / 100.0)
         
-    # 🏷️ Koleksiyon Önceliği Bonusu
+    # Koleksiyon Bonusu
     if f_collection_priority and selected_priority_collections:
         if any(c in r.get("member_collections", []) for c in selected_priority_collections):
             score += col_bonus
             
+    # Sezon Bonusu (Kışlık ürün Multi Sezona göre ekstra hafif bir avantaja sahip olur)
     if f_season and r["season"] in selected_priority_seasons:
-        score += season_bonus
-        
+        if r["season"] == "Kış (FW)":
+            score += season_bonus
+        elif r["season"] == "Multi Sezon":
+            score += (season_bonus * 0.85)
+            
     if f_discount:
         score += (r["discount_pct"] / 100.0) * discount_weight
     if enable_broken_penalty and r["size_status"] == "Kırık Beden":
@@ -780,12 +776,12 @@ def compute_combined_score(r):
 other_active_rules = any([
     f_sales, f_stock, f_new, f_recent_stock, 
     (f_collection_priority and selected_priority_collections),
-    (f_season and selected_priority_seasons), protect_page1_tshirts, f_discount, 
+    (f_season and selected_priority_seasons), enable_fw_multi_interleaving, protect_page1_tshirts, f_discount, 
     enable_broken_penalty, enable_single_penalty
 ])
 
 any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
-current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{col_bonus}_{f_season}_{selected_priority_seasons}_{protect_page1_tshirts}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
+current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{col_bonus}_{f_season}_{selected_priority_seasons}_{enable_fw_multi_interleaving}_{protect_page1_tshirts}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
 # Sadece kullanıcı sol filtrelerden birini değiştirdiğinde otomatik yeniden sırala
@@ -816,16 +812,16 @@ if st.session_state.get(last_filters_key) != current_filters_hash:
     else:
         df["Hesaplanan Skor"] = df.apply(compute_combined_score, axis=1)
         
-        if push_out_of_stock:
-            in_stock_df = df[df["total_stock"] > 0].sort_values(by="Hesaplanan Skor", ascending=False)
-            out_of_stock_df = df[df["total_stock"] <= 0].sort_values(by="Hesaplanan Skor", ascending=False)
-            df_sorted = pd.concat([in_stock_df, out_of_stock_df]).reset_index(drop=True)
+        # ❄️ Kış ve Multi Sezonu Eşit Dönüşümlü Harmanlama
+        if enable_fw_multi_interleaving:
+            df_sorted = interleave_fw_and_multi(df)
         else:
-            df_sorted = df.sort_values(by="Hesaplanan Skor", ascending=False).reset_index(drop=True)
-
-        # 👕 T-Shirt 1. Sayfa Korumasını Uygula
-        if protect_page1_tshirts:
-            df_sorted = apply_page1_protection_for_tshirts(df_sorted, page_size=24)
+            if push_out_of_stock:
+                in_stock_df = df[df["total_stock"] > 0].sort_values(by="Hesaplanan Skor", ascending=False)
+                out_of_stock_df = df[df["total_stock"] <= 0].sort_values(by="Hesaplanan Skor", ascending=False)
+                df_sorted = pd.concat([in_stock_df, out_of_stock_df]).reset_index(drop=True)
+            else:
+                df_sorted = df.sort_values(by="Hesaplanan Skor", ascending=False).reset_index(drop=True)
 
     if enable_clustering_fix and uploaded_backup is None:
         df_sorted = diversify_grid_4(df_sorted, lookback=4)
@@ -846,7 +842,8 @@ if f_new: active_badges.append("✨ En Son Eklenenler")
 if f_recent_stock: active_badges.append("🔄 Stoğu En Son Güncellenenler")
 if f_collection_priority and selected_priority_collections: active_badges.append(f"🏷️ Koleksiyon: {', '.join(selected_priority_collections)}")
 if f_season and selected_priority_seasons: active_badges.append(f"❄️/☀️ Sezon: {', '.join(selected_priority_seasons)}")
-if protect_page1_tshirts: active_badges.append("🛡️ T-Shirt'ler 2. Sayfadan Başlar")
+if enable_fw_multi_interleaving: active_badges.append("🔄 1 FW - 1 Multi Harmanlama")
+if protect_page1_tshirts: active_badges.append("🛡️ T-Shirt 1. Sayfa Koruması")
 if f_discount: active_badges.append("🏷️ İndirim Oranı")
 if push_out_of_stock: active_badges.append("🚫 0 Stok Sonda")
 if enable_clustering_fix: active_badges.append("🎨 4'lü Izgara Ayrıştırma")
@@ -917,7 +914,7 @@ with t_c3:
         else:
             st.warning("Lütfen taşınacak en az bir ürün seçin.")
 
-# ==================== 🧲 SÜRÜKLE-BIRAK KÖPRÜSÜ (KESİNLEŞTİRME PANELİ) ====================
+# ==================== 🧲 SÜRÜKLE-BIRAK KÖPRÜSÜ ====================
 with st.expander("💾 Sürükle-Bırak İle Yaptığım Sırayı Kesinleştir & Tabloya Kaydet", expanded=True):
     st.caption("Aşağıdaki kartları fareyle sürükleyip yerlerini değiştirdikten sonra, en üstteki bardan kopyalanan sırayı buraya yapıştırıp kaydedin:")
     s_col1, s_col2 = st.columns([3.5, 1.2])
