@@ -154,16 +154,20 @@ def detect_season(tags_list):
         return "Kış (FW)"
     return "Multi Sezon"
 
-# --- DETAYLI KIŞ/YAZ VE ÜRÜN KATEGORİSİ TESPİTİ ---
+# --- DETAYLI KATEGORİ VE KIŞA UYGUNLUK TESPİTİ ---
 def detect_main_category(title, tags):
     txt = turkish_upper(str(title) + " " + " ".join([str(t) for t in tags]))
     
-    # 1. Yazlık Açık Parçalar (Arkaya itilecekler)
-    summer_types = ["CROP", "KISA KOL", "ASKILI", "BUSTIYER", "SORT", "KOLSUZ", "HALTER", "STRAPLEZ", "MINI", "BERMUDA", "BIKINI", "MAYO"]
-    if any(k in txt for k in summer_types) and not any(k in txt for k in ["ESOFMAN", "TAKIM"]):
+    # İç Çamaşırı, Bot, Ayakkabı, Aksesuar (İlk sıralardan menedilecekler)
+    if any(k in txt for k in ["SUTYEN", "KULOT", "CORAP", "IC CAMASIR", "BIKINI", "MAYO", "MAYOKINI", "TERLIK", "SANDALET", "AYAKKABI", "BOT", "CIZME", "SAPKA"]):
+        return "ALT_SEGMENT"
+    
+    # Yazlık Açık Parçalar
+    summer_types = ["CROP", "KISA KOL", "ASKILI", "BUSTIYER", "SORT", "KOLSUZ", "HALTER", "STRAPLEZ", "MINI", "BERMUDA", "KETEN"]
+    if any(k in txt for k in summer_types) and not any(k in txt for k in ["ESOFMAN"]):
         return "YAZLIK_ACIK"
         
-    # 2. Ana Kışlık/Sonbahar Kategorileri
+    # Kışlık Ana Gruplar
     if any(k in txt for k in ["ESOFMAN", "SWEATPANTS", "JOGGER", "HOODIE"]):
         return "ESOFMAN_TAKIM"
     if any(k in txt for k in ["KAZAK", "TRIKO", "HIRKA", "SWEATSHIRT", "POLAR"]):
@@ -313,8 +317,23 @@ def get_collection_data_fast(collection_id):
     now_utc = pd.Timestamp.now(tz="UTC")
     df_res["created_dt"] = pd.to_datetime(df_res["created_at"], utc=True)
     df_res["updated_dt"] = pd.to_datetime(df_res["updated_at"], utc=True)
-    df_res["days_old"] = (now_utc - df_res["created_dt"]).dt.days
-    df_res["days_since_update"] = (now_utc - df_res["updated_dt"]).dt.days
+    df_res["days_old"] = (now_utc - df_res["created_dt"]).dt.total_seconds() / 86400.0
+    df_res["days_since_update"] = (now_utc - df_res["updated_dt"]).dt.total_seconds() / 86400.0
+
+    # ⚡ DİNAMİK TAZELİK SKORLARI (Koleksiyon içinde en son ne eklendiyse ve güncellendiyse 100 puan)
+    min_c = df_res["created_dt"].min()
+    max_c = df_res["created_dt"].max()
+    if max_c > min_c:
+        df_res["new_arrival_score"] = ((df_res["created_dt"] - min_c) / (max_c - min_c)) * 100.0
+    else:
+        df_res["new_arrival_score"] = 50.0
+
+    min_u = df_res["updated_dt"].min()
+    max_u = df_res["updated_dt"].max()
+    if max_u > min_u:
+        df_res["recent_stock_score"] = ((df_res["updated_dt"] - min_u) / (max_u - min_u)) * 100.0
+    else:
+        df_res["recent_stock_score"] = 50.0
 
     best_selling_order = {}
     query_bs = """
@@ -382,43 +401,47 @@ def diversify_grid_4(df_in, lookback=4):
     result.extend(out_of_stock)
     return pd.DataFrame(result)
 
-# --- 🍂 KATEGORİ DENGELİ KIŞ DAĞITIM MOTORU ---
-def balance_winter_categories(df_in):
+# --- 🍂 KATI KADEMELİ KIŞA GEÇİŞ MOTORU ---
+def run_winter_transition_engine(df_in):
     in_stock = df_in[df_in["total_stock"] > 0].copy()
     out_of_stock = df_in[df_in["total_stock"] <= 0].copy()
     
-    # Yazlık açık olanları ön vitrinden ayırıp arka havuza alıyoruz
-    winter_ready = in_stock[in_stock["main_category"] != "YAZLIK_ACIK"].copy()
-    summer_back = in_stock[in_stock["main_category"] == "YAZLIK_ACIK"].copy()
+    # 1. KADEME (EN ÖN): Kış (FW) VE Multi Sezon olup kışa uygun olan ana parçalar
+    tier1_mask = (
+        (in_stock["season"].isin(["Kış (FW)", "Multi Sezon"])) &
+        (~in_stock["main_category"].isin(["ALT_SEGMENT", "YAZLIK_ACIK"]))
+    )
+    tier1_df = in_stock[tier1_mask].copy()
     
-    # Kategorilere bölüp her birini kendi skoruna göre sıralıyoruz
-    categories_order = [
-        "ESOFMAN_TAKIM", 
-        "KAZAK_TRIKO", 
-        "PANTOLON", 
-        "CEKET_BLAZER", 
-        "ELBISE_ETEK", 
-        "BLUZ_GOMLEK", 
-        "TAKIM", 
-        "DIGER_STANDART"
-    ]
+    # Kategori döngüsüyle harmanla (Kendi içinde en taze/skorlu olanlar öne gelir)
+    cat_order = ["KAZAK_TRIKO", "PANTOLON", "ESOFMAN_TAKIM", "CEKET_BLAZER", "BLUZ_GOMLEK", "ELBISE_ETEK", "TAKIM", "DIGER_STANDART"]
+    cat_buckets = {c: tier1_df[tier1_df["main_category"] == c].sort_values(by="Hesaplanan Skor", ascending=False).to_dict("records") for c in cat_order}
     
-    cat_buckets = {cat: winter_ready[winter_ready["main_category"] == cat].to_dict("records") for cat in categories_order}
-    
-    interleaved_result = []
+    tier1_interleaved = []
     has_items = True
-    
-    # Her turda her kategoriden 1'er ürün alarak harmanlıyoruz
     while has_items:
         has_items = False
-        for cat in categories_order:
-            if cat_buckets[cat]:
-                interleaved_result.append(cat_buckets[cat].pop(0))
+        for c in cat_order:
+            if cat_buckets[c]:
+                tier1_interleaved.append(cat_buckets[c].pop(0))
                 has_items = True
                 
-    # Kalan yazlık açıklar ve tükenenler arka sıralara eklenir
-    final_list = interleaved_result + summer_back.to_dict("records") + out_of_stock.to_dict("records")
-    return pd.DataFrame(final_list)
+    tier1_ids = set([x["product_id"] for x in tier1_interleaved])
+    
+    # 2. KADEME (ORTA): Multi Sezon'dan kalan diğer standart ürünler
+    tier2_mask = (
+        (in_stock["season"] == "Multi Sezon") & 
+        (~in_stock["product_id"].isin(tier1_ids)) &
+        (in_stock["main_category"] != "ALT_SEGMENT")
+    )
+    tier2_df = in_stock[tier2_mask].copy().sort_values(by="Hesaplanan Skor", ascending=False)
+    
+    # 3. KADEME (EN ARKA): Yaz (SS) ürünleri, Multi Crop/Açıklar ve İç çamaşırı/Ayakkabılar
+    handled_ids = tier1_ids.union(set(tier2_df["product_id"]))
+    tier3_df = in_stock[~in_stock["product_id"].isin(handled_ids)].copy().sort_values(by="Hesaplanan Skor", ascending=False)
+    
+    final_records = tier1_interleaved + tier2_df.to_dict("records") + tier3_df.to_dict("records") + out_of_stock.to_dict("records")
+    return pd.DataFrame(final_records)
 
 # --- 4. CANLIYA ALMA MUTASYONU ---
 def reorder_shopify_collection(collection_id, product_ids, show_progress=True):
@@ -605,10 +628,10 @@ st.sidebar.divider()
 st.sidebar.subheader("⚡ Hızlı Filtreleme & Öncelikler")
 st.sidebar.caption("İstediğin filtreleri açarak yeni sıralamayı oluşturabilirsin:")
 
-f_sales = st.sidebar.checkbox("🔥 Çok Satanlar Öne Çıksın", value=False)
-f_stock = st.sidebar.checkbox("📦 Bol Stoklular Öne Çıksın (Bedene Bakmadan)", value=False)
-f_new = st.sidebar.checkbox("✨ Yeni Eklenenler Öne Çıksın", value=False)
-f_recent_stock = st.sidebar.checkbox("🔄 Stoğu Yeni Gelenler Öne Çıksın", value=False)
+f_sales = st.sidebar.checkbox("🔥 Çok Satanlar Öne Çıksın", value=True)
+f_stock = st.sidebar.checkbox("📦 Bol Stoklular Öne Çıksın (Bedene Bakmadan)", value=True)
+f_new = st.sidebar.checkbox("✨ En Son Eklenenler Öne Çıksın (Göreceli)", value=True)
+f_recent_stock = st.sidebar.checkbox("🔄 Stoğu En Son Güncellenenler Öne Çıksın", value=True)
 f_discount = st.sidebar.checkbox("🏷️ İndirimliler Öne Çıksın", value=False)
 
 f_season = st.sidebar.checkbox("❄️/☀️ Sezon Önceliği Uygula", value=False)
@@ -620,39 +643,30 @@ if f_season:
         default=["Kış (FW)", "Multi Sezon"]
     )
 
-# --- 🍂 KATEGORİ DENGELİ KIŞA GEÇİŞ MODU ---
+# --- 🍂 KATI KADEMELİ KIŞA GEÇİŞ MODU ---
 st.sidebar.divider()
 st.sidebar.subheader("🍂 Sezon Geçiş Dengelemesi")
 enable_season_balance = st.sidebar.checkbox(
-    "🍂 Kışa Geçiş Modu (Kategori Dağıtımlı)", 
-    value=False,
-    help="Kazak, Pantolon, Eşofman, Ceket, Elbise, Bluz kategorilerini eşit oranla vitrine serpiştirir; açık/crop ürünleri arkaya atar."
+    "🍂 Kışa Geçiş Modu (Kış & Multi Önde, Yaz Kesin Sonda)", 
+    value=True,
+    help="Kış ve kışa uygun multi ürünleri harmanlayıp en başa dizer. Yazlıkları, crop'ları ve iç çamaşırlarını kesin olarak arkaya iter."
 )
 
 st.sidebar.divider()
 
 # --- VİTRİN HİJYENİ VE KORUMA ---
 st.sidebar.subheader("🛡️ Vitrin Kuralları")
-push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=False)
-enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgarada Model/Renk Ayrıştır", value=False)
-enable_broken_penalty = st.sidebar.checkbox("⚠️ Kırık Bedenleri Cezalandır", value=False)
-enable_single_penalty = st.sidebar.checkbox("⚠️ Tek Beden Kalanları Cezalandır", value=False)
+push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=True)
+enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgarada Model/Renk Ayrıştır", value=True)
+enable_broken_penalty = st.sidebar.checkbox("⚠️ Kırık Bedenleri Cezalandır", value=True)
+enable_single_penalty = st.sidebar.checkbox("⚠️ Tek Beden Kalanları Cezalandır", value=True)
 
 # --- DETAYLI AYARLAR ---
 with st.sidebar.expander("🛠️ Detaylı Ağırlık ve Ceza Ayarları"):
     sales_weight = st.slider("Satış Performansı Ağırlığı (%)", 0, 100, 45) if f_sales else 0
-    stock_weight = st.slider("Stok Hacmi Ağırlığı (%)", 0, 100, 40) if f_stock else 0
-    
-    if f_new:
-        new_days = st.slider("Yeni Gelen Eşiği (Gün)", 1, 60, 20)
-        new_bonus = st.slider("Yeni Gelen Bonus Puanı", 0, 100, 30)
-    else:
-        new_days, new_bonus = 0, 0
-        
-    if f_recent_stock:
-        recent_stock_bonus = st.slider("Stok Güncelleme Bonusu", 0, 60, 25)
-    else:
-        recent_stock_bonus = 0
+    stock_weight = st.slider("Stok Hacmi Ağırlığı (%)", 0, 100, 35) if f_stock else 0
+    new_weight = st.slider("En Son Eklenen Önceliği (%)", 0, 100, 40) if f_new else 0
+    recent_stock_weight = st.slider("En Son Stok Güncelleme Önceliği (%)", 0, 100, 30) if f_recent_stock else 0
         
     if f_season and selected_priority_seasons:
         season_bonus = st.slider("Sezon Bonusu", 0, 100, 35)
@@ -718,12 +732,18 @@ def compute_combined_score(r):
         score += (r["shopify_sales_score"]) * (sales_weight / 100.0)
     if f_stock:
         score += (r["total_stock"] / max_stock) * stock_weight
-    if f_new and r["days_old"] <= new_days:
-        score += new_bonus
-    if f_recent_stock and r["days_since_update"] <= 5:
-        score += recent_stock_bonus
+    
+    # ⚡ DİNAMİK TAZELİK PUANI (Sabit 30 gün yok, koleksiyon içinde en yeni olan tam puan alır)
+    if f_new:
+        score += (r.get("new_arrival_score", 0.0)) * (new_weight / 100.0)
+        
+    # ⚡ DİNAMİK STOK HAREKETİ PUANI (En son güncellenen tam puan alır)
+    if f_recent_stock:
+        score += (r.get("recent_stock_score", 0.0)) * (recent_stock_weight / 100.0)
+        
     if f_season and r["season"] in selected_priority_seasons:
         score += season_bonus
+        
     if f_discount:
         score += (r["discount_pct"] / 100.0) * discount_weight
     if enable_broken_penalty and r["size_status"] == "Kırık Beden":
@@ -739,7 +759,7 @@ other_active_rules = any([
 ])
 
 any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
-current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{f_recent_stock}_{f_season}_{selected_priority_seasons}_{enable_season_balance}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
+current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_season}_{selected_priority_seasons}_{enable_season_balance}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
 # Sadece kullanıcı sol filtrelerden birini değiştirdiğinde otomatik yeniden sırala
@@ -769,16 +789,17 @@ if st.session_state.get(last_filters_key) != current_filters_hash:
         
     else:
         df["Hesaplanan Skor"] = df.apply(compute_combined_score, axis=1)
-        if push_out_of_stock:
-            in_stock_df = df[df["total_stock"] > 0].sort_values(by="Hesaplanan Skor", ascending=False)
-            out_of_stock_df = df[df["total_stock"] <= 0].sort_values(by="Hesaplanan Skor", ascending=False)
-            df_sorted = pd.concat([in_stock_df, out_of_stock_df]).reset_index(drop=True)
-        else:
-            df_sorted = df.sort_values(by="Hesaplanan Skor", ascending=False).reset_index(drop=True)
-
-        # 🍂 Kışa geçiş modu açık ise kategorileri eşit harmanla
+        
+        # 🍂 Kışa geçiş modu açık ise katı kademeli dağıtımı çalıştır
         if enable_season_balance:
-            df_sorted = balance_winter_categories(df_sorted)
+            df_sorted = run_winter_transition_engine(df)
+        else:
+            if push_out_of_stock:
+                in_stock_df = df[df["total_stock"] > 0].sort_values(by="Hesaplanan Skor", ascending=False)
+                out_of_stock_df = df[df["total_stock"] <= 0].sort_values(by="Hesaplanan Skor", ascending=False)
+                df_sorted = pd.concat([in_stock_df, out_of_stock_df]).reset_index(drop=True)
+            else:
+                df_sorted = df.sort_values(by="Hesaplanan Skor", ascending=False).reset_index(drop=True)
 
     if enable_clustering_fix and uploaded_backup is None:
         df_sorted = diversify_grid_4(df_sorted, lookback=4)
@@ -795,10 +816,9 @@ st.title(f"🛍️ {selected_col_label.split(' (')[0]}")
 active_badges = []
 if f_sales: active_badges.append("🔥 Çok Satanlar")
 if f_stock: active_badges.append("📦 Bol Stoklular")
-if f_new: active_badges.append("✨ Yeni Eklenenler")
-if f_recent_stock: active_badges.append("🔄 Stoğu Yenilenenler")
-if f_season and selected_priority_seasons: active_badges.append(f"❄️/☀️ Sezon: {', '.join(selected_priority_seasons)}")
-if enable_season_balance: active_badges.append("🍂 Dengeli Kış Vitrini (Eşit Kategori Dağıtımı)")
+if f_new: active_badges.append("✨ En Son Eklenenler (Dinamik Öncelik)")
+if f_recent_stock: active_badges.append("🔄 Stoğu En Son Güncellenenler")
+if enable_season_balance: active_badges.append("🍂 Katı Kış & Multi Önceliği (Yaz & İç Giyim Sonda)")
 if f_discount: active_badges.append("🏷️ İndirim Oranı")
 if push_out_of_stock: active_badges.append("🚫 0 Stok Sonda")
 if enable_clustering_fix: active_badges.append("🎨 4'lü Izgara Ayrıştırma")
@@ -1205,7 +1225,7 @@ else:
             "active_sizes": st.column_config.NumberColumn("Beden"),
             "size_status": st.column_config.TextColumn("Beden Durumu"),
             "discount_pct": st.column_config.NumberColumn("İndirim %"),
-            "days_old": st.column_config.NumberColumn("Gün"),
+            "days_old": st.column_config.NumberColumn("Gün", format="%.0f gün"),
             "price": st.column_config.NumberColumn("Fiyat (TL)", format="%.2f TL")
         }
     )
