@@ -185,7 +185,7 @@ def detect_main_category(title, tags):
         
     return "DIGER_STANDART"
 
-# --- 2. ÜRÜNLERİ, GÖRSELLERİ VE CANLI SIRAYI ÇEKME ---
+# --- 2. ÜRÜNLERİ, GÖRSELLERİ, CANLI SIRAYI VE BAĞLI KOLEKSİYONLARI ÇEKME ---
 @st.cache_data(ttl=120)
 def get_collection_data_fast(collection_id):
     products = []
@@ -208,6 +208,14 @@ def get_collection_data_fast(collection_id):
               createdAt
               updatedAt
               totalInventory
+              collections(first: 10) {
+                edges {
+                  node {
+                    id
+                    title
+                  }
+                }
+              }
               images(first: 1) {
                 edges {
                   node {
@@ -244,6 +252,10 @@ def get_collection_data_fast(collection_id):
             p = edge["node"]
             tags = p.get("tags", [])
             variants = edge["node"]["variants"]["edges"]
+            
+            # Bağlı olduğu koleksiyonlar
+            col_edges = p.get("collections", {}).get("edges", [])
+            product_collections = [c["node"].get("title") for c in col_edges if c.get("node", {}).get("title")]
             
             img_url = ""
             img_edges = p.get("images", {}).get("edges", [])
@@ -293,6 +305,7 @@ def get_collection_data_fast(collection_id):
                 "sku": first_sku,
                 "all_skus": all_skus,
                 "tags": tags,
+                "member_collections": product_collections,
                 "season": detect_season(tags),
                 "main_category": detect_main_category(p["title"], tags),
                 "model_base": extract_model_base(p["title"]),
@@ -320,7 +333,7 @@ def get_collection_data_fast(collection_id):
     df_res["days_old"] = (now_utc - df_res["created_dt"]).dt.total_seconds() / 86400.0
     df_res["days_since_update"] = (now_utc - df_res["updated_dt"]).dt.total_seconds() / 86400.0
 
-    # ⚡ DİNAMİK TAZELİK SKORLARI (Koleksiyon içinde en son ne eklendiyse ve güncellendiyse 100 puan)
+    # ⚡ DİNAMİK TAZELİK SKORLARI (Koleksiyon içindeki en taze ürün 100 puan)
     min_c = df_res["created_dt"].min()
     max_c = df_res["created_dt"].max()
     if max_c > min_c:
@@ -407,6 +420,7 @@ def run_winter_transition_engine(df_in):
     out_of_stock = df_in[df_in["total_stock"] <= 0].copy()
     
     # 1. KADEME (EN ÖN): Kış (FW) VE Multi Sezon olup kışa uygun olan ana parçalar
+    # Kesinlikle Yaz (SS) OLMAYACAK, Alt Segment (İç Çamaşırı/Bot) OLMAYACAK, Açık Yazlık OLMAYACAK
     tier1_mask = (
         (in_stock["season"].isin(["Kış (FW)", "Multi Sezon"])) &
         (~in_stock["main_category"].isin(["ALT_SEGMENT", "YAZLIK_ACIK"]))
@@ -624,14 +638,14 @@ if (session_key not in st.session_state) or (len(st.session_state[session_key]) 
 
 st.sidebar.divider()
 
-# --- 🚀 HIZLI STRATEJİLER ---
+# --- 🚀 HIZLI STRATEJİLER (VARSAYILAN: FALSE - TERTEMİZ BAŞLAR) ---
 st.sidebar.subheader("⚡ Hızlı Filtreleme & Öncelikler")
 st.sidebar.caption("İstediğin filtreleri açarak yeni sıralamayı oluşturabilirsin:")
 
-f_sales = st.sidebar.checkbox("🔥 Çok Satanlar Öne Çıksın", value=True)
-f_stock = st.sidebar.checkbox("📦 Bol Stoklular Öne Çıksın (Bedene Bakmadan)", value=True)
-f_new = st.sidebar.checkbox("✨ En Son Eklenenler Öne Çıksın (Göreceli)", value=True)
-f_recent_stock = st.sidebar.checkbox("🔄 Stoğu En Son Güncellenenler Öne Çıksın", value=True)
+f_sales = st.sidebar.checkbox("🔥 Çok Satanlar Öne Çıksın", value=False)
+f_stock = st.sidebar.checkbox("📦 Bol Stoklular Öne Çıksın (Bedene Bakmadan)", value=False)
+f_new = st.sidebar.checkbox("✨ En Son Eklenenler Öne Çıksın (Dinamik)", value=False)
+f_recent_stock = st.sidebar.checkbox("🔄 Stoğu En Son Güncellenenler Öne Çıksın", value=False)
 f_discount = st.sidebar.checkbox("🏷️ İndirimliler Öne Çıksın", value=False)
 
 f_season = st.sidebar.checkbox("❄️/☀️ Sezon Önceliği Uygula", value=False)
@@ -643,23 +657,38 @@ if f_season:
         default=["Kış (FW)", "Multi Sezon"]
     )
 
+# --- 🏷️ YENİ: AİT OLDUĞU KOLEKSİYONA GÖRE ÖNCELİK VERME ---
+st.sidebar.divider()
+st.sidebar.subheader("🏷️ Koleksiyon Önceliği")
+f_collection_priority = st.sidebar.checkbox("🏷️ Seçili Koleksiyonlardaki Ürünler Öne Çıksın", value=False)
+
+# Mağazadaki mevcut tüm koleksiyon isimlerini çekiyoruz
+all_store_collections = sorted(list(set([c["title"] for c in collections])))
+selected_priority_collections = []
+if f_collection_priority:
+    selected_priority_collections = st.sidebar.multiselect(
+        "Öne Gelecek Koleksiyonları Belirleyin:",
+        options=all_store_collections,
+        placeholder="Örn: Yeni Sezon, Kış, Triko..."
+    )
+
 # --- 🍂 KATI KADEMELİ KIŞA GEÇİŞ MODU ---
 st.sidebar.divider()
 st.sidebar.subheader("🍂 Sezon Geçiş Dengelemesi")
 enable_season_balance = st.sidebar.checkbox(
     "🍂 Kışa Geçiş Modu (Kış & Multi Önde, Yaz Kesin Sonda)", 
-    value=True,
+    value=False,
     help="Kış ve kışa uygun multi ürünleri harmanlayıp en başa dizer. Yazlıkları, crop'ları ve iç çamaşırlarını kesin olarak arkaya iter."
 )
 
 st.sidebar.divider()
 
-# --- VİTRİN HİJYENİ VE KORUMA ---
+# --- VİTRİN HİJYENİ VE KORUMA (VARSAYILAN: FALSE) ---
 st.sidebar.subheader("🛡️ Vitrin Kuralları")
-push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=True)
-enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgarada Model/Renk Ayrıştır", value=True)
-enable_broken_penalty = st.sidebar.checkbox("⚠️ Kırık Bedenleri Cezalandır", value=True)
-enable_single_penalty = st.sidebar.checkbox("⚠️ Tek Beden Kalanları Cezalandır", value=True)
+push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=False)
+enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgarada Model/Renk Ayrıştır", value=False)
+enable_broken_penalty = st.sidebar.checkbox("⚠️ Kırık Bedenleri Cezalandır", value=False)
+enable_single_penalty = st.sidebar.checkbox("⚠️ Tek Beden Kalanları Cezalandır", value=False)
 
 # --- DETAYLI AYARLAR ---
 with st.sidebar.expander("🛠️ Detaylı Ağırlık ve Ceza Ayarları"):
@@ -667,6 +696,7 @@ with st.sidebar.expander("🛠️ Detaylı Ağırlık ve Ceza Ayarları"):
     stock_weight = st.slider("Stok Hacmi Ağırlığı (%)", 0, 100, 35) if f_stock else 0
     new_weight = st.slider("En Son Eklenen Önceliği (%)", 0, 100, 40) if f_new else 0
     recent_stock_weight = st.slider("En Son Stok Güncelleme Önceliği (%)", 0, 100, 30) if f_recent_stock else 0
+    col_bonus = st.slider("Koleksiyon Öncelik Bonusu", 0, 100, 40) if (f_collection_priority and selected_priority_collections) else 0
         
     if f_season and selected_priority_seasons:
         season_bonus = st.slider("Sezon Bonusu", 0, 100, 35)
@@ -733,14 +763,19 @@ def compute_combined_score(r):
     if f_stock:
         score += (r["total_stock"] / max_stock) * stock_weight
     
-    # ⚡ DİNAMİK TAZELİK PUANI (Sabit 30 gün yok, koleksiyon içinde en yeni olan tam puan alır)
+    # ⚡ Dinamik Göreceli Tazelik
     if f_new:
         score += (r.get("new_arrival_score", 0.0)) * (new_weight / 100.0)
         
-    # ⚡ DİNAMİK STOK HAREKETİ PUANI (En son güncellenen tam puan alır)
+    # ⚡ Dinamik Stok Hareketi
     if f_recent_stock:
         score += (r.get("recent_stock_score", 0.0)) * (recent_stock_weight / 100.0)
         
+    # 🏷️ Koleksiyon Önceliği Bonusu
+    if f_collection_priority and selected_priority_collections:
+        if any(c in r.get("member_collections", []) for c in selected_priority_collections):
+            score += col_bonus
+            
     if f_season and r["season"] in selected_priority_seasons:
         score += season_bonus
         
@@ -754,12 +789,13 @@ def compute_combined_score(r):
 
 other_active_rules = any([
     f_sales, f_stock, f_new, f_recent_stock, 
+    (f_collection_priority and selected_priority_collections),
     (f_season and selected_priority_seasons), enable_season_balance, f_discount, 
     enable_broken_penalty, enable_single_penalty
 ])
 
 any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
-current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_season}_{selected_priority_seasons}_{enable_season_balance}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
+current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{col_bonus}_{f_season}_{selected_priority_seasons}_{enable_season_balance}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
 # Sadece kullanıcı sol filtrelerden birini değiştirdiğinde otomatik yeniden sırala
@@ -818,6 +854,7 @@ if f_sales: active_badges.append("🔥 Çok Satanlar")
 if f_stock: active_badges.append("📦 Bol Stoklular")
 if f_new: active_badges.append("✨ En Son Eklenenler (Dinamik Öncelik)")
 if f_recent_stock: active_badges.append("🔄 Stoğu En Son Güncellenenler")
+if f_collection_priority and selected_priority_collections: active_badges.append(f"🏷️ Koleksiyon: {', '.join(selected_priority_collections)}")
 if enable_season_balance: active_badges.append("🍂 Katı Kış & Multi Önceliği (Yaz & İç Giyim Sonda)")
 if f_discount: active_badges.append("🏷️ İndirim Oranı")
 if push_out_of_stock: active_badges.append("🚫 0 Stok Sonda")
