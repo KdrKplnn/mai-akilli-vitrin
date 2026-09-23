@@ -154,6 +154,26 @@ def detect_season(tags_list):
         return "Kış (FW)"
     return "Multi Sezon"
 
+# --- KIŞ GEÇİŞİ MİKRO TİP TESPİTİ ---
+def detect_micro_garment_type(title, tags):
+    txt = turkish_upper(str(title) + " " + " ".join([str(t) for t in tags]))
+    
+    # Eşofman takımları (Kısa veya uzun kollu fark etmeksizin öncelikli)
+    if any(k in txt for k in ["ESOFMAN", "SWEATPANTS", "JOGGER", "HOODIE"]):
+        return "ESOFMAN"
+    
+    # Yazlık / Açık ürünler (Multi sezonda arkaya kaydırılacaklar)
+    summer_types = ["CROP", "KISA KOL", "ASKILI", "BUSTIYER", "SORT", "KOLSUZ", "HALTER", "STRAPLEZ", "MINI", "BERMUDA", "BODY"]
+    if any(k in txt for k in summer_types):
+        return "YAZLIK_ACIK"
+        
+    # Kışlık / Uzun kollu tipler
+    winter_types = ["KABAN", "MONT", "HIRKA", "TRIKO", "KAZAK", "SWEATSHIRT", "POLAR", "UZUN KOL", "CEKET", "BLAZER", "PANTOLON"]
+    if any(k in txt for k in winter_types):
+        return "KISLIK_UZUN"
+        
+    return "STANDART"
+
 # --- 2. ÜRÜNLERİ, GÖRSELLERİ VE CANLI SIRAYI ÇEKME ---
 @st.cache_data(ttl=120)
 def get_collection_data_fast(collection_id):
@@ -263,6 +283,7 @@ def get_collection_data_fast(collection_id):
                 "all_skus": all_skus,
                 "tags": tags,
                 "season": detect_season(tags),
+                "micro_type": detect_micro_garment_type(p["title"], tags),
                 "model_base": extract_model_base(p["title"]),
                 "color": extract_color(p["title"], tags),
                 "total_stock": p.get("totalInventory", 0),
@@ -554,12 +575,21 @@ if f_season:
         default=["Kış (FW)", "Multi Sezon"]
     )
 
+# --- 🍂 YENİ: AKILLI SEZON GEÇİŞ DENGELEMESİ ---
+st.sidebar.divider()
+st.sidebar.subheader("🍂 Sezon Geçiş Dengelemesi")
+enable_season_balance = st.sidebar.checkbox(
+    "🍂 Kışa Geçiş Modu (Kışlık & Eşofman Öne, Açıkları Arkaya)", 
+    value=False,
+    help="Multi sezondaki eşofman takımlarını ve uzun kolluları öne alır, kısa kollu/crop/askılı olanları arka sıralara iter."
+)
+
 st.sidebar.divider()
 
 # --- VİTRİN HİJYENİ VE KORUMA ---
 st.sidebar.subheader("🛡️ Vitrin Kuralları")
 push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=False)
-enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgarada Model/Renk Ayrıştır", value=False)
+enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgara Ayrıştırma", value=False)
 enable_broken_penalty = st.sidebar.checkbox("⚠️ Kırık Bedenleri Cezalandır", value=False)
 enable_single_penalty = st.sidebar.checkbox("⚠️ Tek Beden Kalanları Cezalandır", value=False)
 
@@ -583,6 +613,12 @@ with st.sidebar.expander("🛠️ Detaylı Ağırlık ve Ceza Ayarları"):
         season_bonus = st.slider("Sezon Bonusu", 0, 100, 35)
     else:
         season_bonus = 0
+        
+    if enable_season_balance:
+        tracksuit_bonus = st.slider("Eşofman Takımı Öncelik Bonusu", 0, 50, 25)
+        summer_crop_penalty = st.slider("Multi Sezon Açık/Crop Cezası", 0, 60, 30)
+    else:
+        tracksuit_bonus, summer_crop_penalty = 0, 0
         
     if f_discount:
         discount_weight = st.slider("İndirim Ağırlığı (%)", 0, 100, 20)
@@ -649,6 +685,19 @@ def compute_combined_score(r):
         score += recent_stock_bonus
     if f_season and r["season"] in selected_priority_seasons:
         score += season_bonus
+        
+    # 🍂 Sezon Geçişi Akıllı Ayrımı
+    if enable_season_balance:
+        # Eşofman takımları uzun veya kısa kollu fark etmeksizin öne
+        if r["micro_type"] == "ESOFMAN":
+            score += tracksuit_bonus
+        # Kışlıklar veya multi uzun kollular öne
+        elif r["season"] == "Kış (FW)" or r["micro_type"] == "KISLIK_UZUN":
+            score += (tracksuit_bonus * 0.8)
+        # Multi sezon veya yazlık olup crop/kısa kollu olanlar geriye
+        elif r["micro_type"] == "YAZLIK_ACIK":
+            score -= summer_crop_penalty
+            
     if f_discount:
         score += (r["discount_pct"] / 100.0) * discount_weight
     if enable_broken_penalty and r["size_status"] == "Kırık Beden":
@@ -659,12 +708,12 @@ def compute_combined_score(r):
 
 other_active_rules = any([
     f_sales, f_stock, f_new, f_recent_stock, 
-    (f_season and selected_priority_seasons), f_discount, 
+    (f_season and selected_priority_seasons), enable_season_balance, f_discount, 
     enable_broken_penalty, enable_single_penalty
 ])
 
 any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
-current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{f_recent_stock}_{f_season}_{selected_priority_seasons}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
+current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{f_recent_stock}_{f_season}_{selected_priority_seasons}_{enable_season_balance}_{tracksuit_bonus}_{summer_crop_penalty}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
 # Sadece kullanıcı sol filtrelerden birini değiştirdiğinde otomatik yeniden sırala
@@ -728,6 +777,7 @@ if f_stock: active_badges.append("📦 Bol Stoklular")
 if f_new: active_badges.append("✨ Yeni Eklenenler")
 if f_recent_stock: active_badges.append("🔄 Stoğu Yenilenenler")
 if f_season and selected_priority_seasons: active_badges.append(f"❄️/☀️ Sezon: {', '.join(selected_priority_seasons)}")
+if enable_season_balance: active_badges.append("🍂 Kış Dengeleme (Eşofman & Uzun Kol Önde)")
 if f_discount: active_badges.append("🏷️ İndirim Oranı")
 if push_out_of_stock: active_badges.append("🚫 0 Stok Sonda")
 if enable_clustering_fix: active_badges.append("🎨 4'lü Izgara Ayrıştırma")
