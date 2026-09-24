@@ -142,8 +142,9 @@ def extract_model_base(title):
     raw_words = clean_alphanumeric.split()
     return raw_words[0] if raw_words else "GENEL"
 
-def detect_season_from_meta_or_tags(meta_val, tags_list):
-    # 1. Öncelik: Shopify Metafield Sezon Alanı
+# --- 🎯 HATASIZ SEZON TESPİT MOTORU ---
+def detect_season_robust(meta_val, tags_list):
+    # 1. Metafield Sezon Alanı
     if meta_val:
         m = turkish_upper(str(meta_val).strip())
         if "MULTI" in m:
@@ -153,16 +154,23 @@ def detect_season_from_meta_or_tags(meta_val, tags_list):
         if any(k in m for k in ["YAZ", "SS", "SUMMER", "SPRING"]):
             return "Yaz (SS)"
 
-    # 2. Öncelik: Etiketler (Tags)
+    # 2. Etiketler (Tags)
     text = turkish_upper(" ".join([str(t) for t in tags_list]))
-    is_summer = any(k in text for k in ["SS", "YAZ", "SUMMER", "SPRING", "ILKBAHAR"])
-    is_winter = any(k in text for k in ["FW", "AW", "KIS", "WINTER", "SONBAHAR", "FALL"])
+    
+    # Etikette MULTI geçiyorsa doğrudan Multi Sezondur
+    if "MULTI SEZON" in text or "MULTI" in text:
+        return "Multi Sezon"
+        
+    is_winter = any(re.search(r'\b' + k + r'\b', text) for k in ["FW", "AW", "KIS", "WINTER", "SONBAHAR", "FALL"])
+    is_summer = any(re.search(r'\b' + k + r'\b', text) for k in ["SS", "YAZ", "SUMMER", "SPRING", "ILKBAHAR"])
+    
     if is_summer and is_winter:
         return "Multi Sezon"
-    elif is_summer:
-        return "Yaz (SS)"
     elif is_winter:
         return "Kış (FW)"
+    elif is_summer:
+        return "Yaz (SS)"
+        
     return "Multi Sezon"
 
 def detect_main_category(title, tags):
@@ -266,7 +274,6 @@ def get_collection_data_fast(collection_id):
             tags = p.get("tags", [])
             variants = edge["node"]["variants"]["edges"]
             
-            # Metafield sezon değeri
             meta_season_val = p.get("seasonMeta", {}).get("value") if p.get("seasonMeta") else None
             
             col_edges = p.get("collections", {}).get("edges", [])
@@ -313,8 +320,8 @@ def get_collection_data_fast(collection_id):
             else:
                 size_status = "Tam Beden"
 
-            # Sezonu Metafield öncelikli belirleme
-            detected_season = detect_season_from_meta_or_tags(meta_season_val, tags)
+            # Hatasız Sezon Çözücü
+            detected_season = detect_season_robust(meta_season_val, tags)
 
             products.append({
                 "product_id": p["id"],
