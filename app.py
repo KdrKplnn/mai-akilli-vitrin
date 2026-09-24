@@ -142,7 +142,18 @@ def extract_model_base(title):
     raw_words = clean_alphanumeric.split()
     return raw_words[0] if raw_words else "GENEL"
 
-def detect_season(tags_list):
+def detect_season_from_meta_or_tags(meta_val, tags_list):
+    # 1. Öncelik: Shopify Metafield Sezon Alanı
+    if meta_val:
+        m = turkish_upper(str(meta_val).strip())
+        if "MULTI" in m:
+            return "Multi Sezon"
+        if any(k in m for k in ["KIS", "FW", "WINTER", "FALL"]):
+            return "Kış (FW)"
+        if any(k in m for k in ["YAZ", "SS", "SUMMER", "SPRING"]):
+            return "Yaz (SS)"
+
+    # 2. Öncelik: Etiketler (Tags)
     text = turkish_upper(" ".join([str(t) for t in tags_list]))
     is_summer = any(k in text for k in ["SS", "YAZ", "SUMMER", "SPRING", "ILKBAHAR"])
     is_winter = any(k in text for k in ["FW", "AW", "KIS", "WINTER", "SONBAHAR", "FALL"])
@@ -184,7 +195,7 @@ def detect_main_category(title, tags):
         
     return "DIGER_STANDART"
 
-# --- 2. ÜRÜNLERİ, GÖRSELLERİ VE VERİLERİ ÇEKME ---
+# --- 2. ÜRÜNLERİ, GÖRSELLERİ VE METAFIELD'LARI ÇEKME ---
 @st.cache_data(ttl=120)
 def get_collection_data_fast(collection_id):
     products = []
@@ -207,6 +218,9 @@ def get_collection_data_fast(collection_id):
               createdAt
               updatedAt
               totalInventory
+              seasonMeta: metafield(namespace: "custom", key: "sezon") {
+                value
+              }
               collections(first: 10) {
                 edges {
                   node {
@@ -252,6 +266,9 @@ def get_collection_data_fast(collection_id):
             tags = p.get("tags", [])
             variants = edge["node"]["variants"]["edges"]
             
+            # Metafield sezon değeri
+            meta_season_val = p.get("seasonMeta", {}).get("value") if p.get("seasonMeta") else None
+            
             col_edges = p.get("collections", {}).get("edges", [])
             product_collections = [c["node"].get("title") for c in col_edges if c.get("node", {}).get("title")]
             
@@ -296,6 +313,9 @@ def get_collection_data_fast(collection_id):
             else:
                 size_status = "Tam Beden"
 
+            # Sezonu Metafield öncelikli belirleme
+            detected_season = detect_season_from_meta_or_tags(meta_season_val, tags)
+
             products.append({
                 "product_id": p["id"],
                 "image": img_url,
@@ -304,7 +324,7 @@ def get_collection_data_fast(collection_id):
                 "all_skus": all_skus,
                 "tags": tags,
                 "member_collections": product_collections,
-                "season": detect_season(tags),
+                "season": detected_season,
                 "main_category": detect_main_category(p["title"], tags),
                 "model_base": extract_model_base(p["title"]),
                 "color": extract_color(p["title"], tags),
@@ -411,7 +431,7 @@ def diversify_grid_4(df_in, lookback=4):
     result.extend(out_of_stock)
     return pd.DataFrame(result)
 
-# --- ❄️ KIŞ VE MULTI SEZON ARASI ZORUNLU DÖNÜŞÜM MOTORU ---
+# --- ❄️ KIŞ VE MULTI SEZON ARASI DÖNÜŞÜM MOTORU ---
 def interleave_fw_and_multi(df_in):
     in_stock = df_in[df_in["total_stock"] > 0].copy()
     out_of_stock = df_in[df_in["total_stock"] <= 0].copy()
@@ -605,7 +625,6 @@ if df_raw.empty:
 session_key = f"orig_{selected_col_id}"
 working_key = f"working_{selected_col_id}"
 
-# Sadece orijinal ham yedek yoksa oluştur (working_key filtre motoruna bırakılır)
 if (session_key not in st.session_state) or (len(st.session_state[session_key]) != len(df_raw)):
     df_backup = df_raw.copy()
     df_backup["Mevcut Sıra"] = df_backup.index + 1
@@ -667,7 +686,7 @@ st.sidebar.divider()
 # --- VİTRİN HİJYENİ VE KORUMA ---
 st.sidebar.subheader("🛡️ Vitrin Kuralları")
 push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=False)
-enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgarada Model/Renk Ayrıştır", value=False)
+enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgara Ayrıştırma", value=False)
 enable_broken_penalty = st.sidebar.checkbox("⚠️ Kırık Bedenleri Cezalandır", value=False)
 enable_single_penalty = st.sidebar.checkbox("⚠️ Tek Beden Kalanları Cezalandır", value=False)
 
@@ -774,7 +793,6 @@ other_active_rules = any([
 ])
 
 any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
-# Koleksiyon kimliğini filtre kontrolüne ekleyerek koleksiyon değişimlerinde otomatik tetikleme sağlanır
 current_filters_hash = f"{selected_col_id}_{any_active}_{f_sales}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{col_bonus}_{f_season}_{selected_priority_seasons}_{enable_fw_multi_interleaving}_{protect_page1_tshirts}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
