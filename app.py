@@ -411,22 +411,17 @@ def diversify_grid_4(df_in, lookback=4):
     result.extend(out_of_stock)
     return pd.DataFrame(result)
 
-# --- ❄️ KIŞ VE MULTI SEZON ARASI ZORUNLU DÖNÜŞÜM (INTERLEAVING) MOTORU ---
+# --- ❄️ KIŞ VE MULTI SEZON ARASI ZORUNLU DÖNÜŞÜM MOTORU ---
 def interleave_fw_and_multi(df_in):
     in_stock = df_in[df_in["total_stock"] > 0].copy()
     out_of_stock = df_in[df_in["total_stock"] <= 0].copy()
     
-    # 1. Kış (FW) Havuzu (Kendi içinde en yüksek skorlular en başta)
     fw_pool = in_stock[(in_stock["season"] == "Kış (FW)") & (~in_stock["main_category"].isin(["ALT_SEGMENT", "YAZLIK_ACIK"]))].sort_values(by="Hesaplanan Skor", ascending=False).to_dict("records")
-    
-    # 2. Multi Sezon Kışa Uygun Havuz (Kendi içinde en yüksek skorlular en başta)
     multi_pool = in_stock[(in_stock["season"] == "Multi Sezon") & (~in_stock["main_category"].isin(["ALT_SEGMENT", "YAZLIK_ACIK", "TSHIRT_KISAKOL"]))].sort_values(by="Hesaplanan Skor", ascending=False).to_dict("records")
     
-    # 3. Kalan Diğerleri (Yazlıklar, Tişörtler, İç Çamaşırları)
     handled_ids = set([x["product_id"] for x in fw_pool] + [x["product_id"] for x in multi_pool])
     remaining_pool = in_stock[~in_stock["product_id"].isin(handled_ids)].sort_values(by="Hesaplanan Skor", ascending=False).to_dict("records")
     
-    # Birebir Dönüşümlü Harmanlama (1 Kış - 1 Multi - 1 Kış - 1 Multi)
     mixed_front = []
     while fw_pool or multi_pool:
         if fw_pool:
@@ -618,7 +613,7 @@ if (session_key not in st.session_state) or (len(st.session_state[session_key]) 
 
 st.sidebar.divider()
 
-# --- 🚀 HIZLI STRATEJİLER ---
+# --- 🚀 HIZLI STRATEJİLER (HEPSİ VARSAYILAN OLARAK KAPALI) ---
 st.sidebar.subheader("⚡ Hızlı Filtreleme & Öncelikler")
 st.sidebar.caption("İstediğin filtreleri açarak yeni sıralamayı oluşturabilirsin:")
 
@@ -628,19 +623,19 @@ f_new = st.sidebar.checkbox("✨ En Son Eklenenler Öne Çıksın (Dinamik)", va
 f_recent_stock = st.sidebar.checkbox("🔄 Stoğu En Son Güncellenenler Öne Çıksın", value=False)
 f_discount = st.sidebar.checkbox("🏷️ İndirimliler Öne Çıksın", value=False)
 
-f_season = st.sidebar.checkbox("❄️/☀️ Sezon Önceliği Uygula", value=True)
+f_season = st.sidebar.checkbox("❄️/☀️ Sezon Önceliği Uygula", value=False)
 selected_priority_seasons = []
 if f_season:
     selected_priority_seasons = st.sidebar.multiselect(
         "Öne Çıkacak Sezonları Seçin:",
         options=["Kış (FW)", "Yaz (SS)", "Multi Sezon"],
-        default=["Kış (FW)", "Multi Sezon"]
+        default=[]
     )
 
-# --- 🏷️ KOLEKSİYON ÖNCELİĞİ ---
+# --- 🏷️ KOLEKSİYON ÖNCELİĞİ (VARSAYILAN: KAPALI) ---
 st.sidebar.divider()
 st.sidebar.subheader("🏷️ Koleksiyon Önceliği")
-f_collection_priority = st.sidebar.checkbox("🏷️ Seçili Koleksiyonlardaki Ürünler Öne Çıksın", value=True)
+f_collection_priority = st.sidebar.checkbox("🏷️ Seçili Koleksiyonlardaki Ürünler Öne Çıksın", value=False)
 
 all_store_collections = sorted(list(set([c["title"] for c in collections])))
 selected_priority_collections = []
@@ -648,31 +643,31 @@ if f_collection_priority:
     selected_priority_collections = st.sidebar.multiselect(
         "Öne Gelecek Koleksiyonları Belirleyin:",
         options=all_store_collections,
-        default=["New Form", "Arrival"] if ("New Form" in all_store_collections and "Arrival" in all_store_collections) else [],
+        default=[],
         placeholder="Örn: New Form, Arrival, Triko..."
     )
 
-# --- ❄️ YENİ: KIŞ & MULTI SEZON HARMANLAMA KURALI ---
+# --- ❄️ SEZON HARMANLAMA & T-SHIRT (VARSAYILAN: KAPALI) ---
 st.sidebar.divider()
 st.sidebar.subheader("❄️ Sezon Harmanlama")
 enable_fw_multi_interleaving = st.sidebar.checkbox(
     "🔄 Kış ve Multi Sezonu Dönüşümlü Harmanla (1 FW - 1 Multi)", 
-    value=True,
+    value=False,
     help="Ön sıralarda sadece Multi Sezon yığılmasını engeller. Sırayı 1 Kışlık - 1 Multi Sezon şeklinde eşit harmanlar."
 )
 
 protect_page1_tshirts = st.sidebar.checkbox(
     "🛡️ T-Shirt'leri 1. Sayfadan Koru (2. Sayfadan Başlasın)", 
-    value=True,
+    value=False,
     help="T-Shirt'leri ilk 24 ürün arasından çıkarıp 2. ve 3. sayfalara öteler."
 )
 
 st.sidebar.divider()
 
-# --- VİTRİN HİJYENİ VE KORUMA ---
+# --- VİTRİN HİJYENİ VE KORUMA (VARSAYILAN: KAPALI) ---
 st.sidebar.subheader("🛡️ Vitrin Kuralları")
-push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=True)
-enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgarada Model/Renk Ayrıştır", value=True)
+push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=False)
+enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgarada Model/Renk Ayrıştır", value=False)
 enable_broken_penalty = st.sidebar.checkbox("⚠️ Kırık Bedenleri Cezalandır", value=False)
 enable_single_penalty = st.sidebar.checkbox("⚠️ Tek Beden Kalanları Cezalandır", value=False)
 
@@ -753,13 +748,11 @@ def compute_combined_score(r):
     if f_recent_stock:
         score += (r.get("recent_stock_score", 0.0)) * (recent_stock_weight / 100.0)
         
-    # Koleksiyon Bonusu
     if f_collection_priority and selected_priority_collections:
         if any(c in r.get("member_collections", []) for c in selected_priority_collections):
             score += col_bonus
             
-    # Sezon Bonusu (Kışlık ürün Multi Sezona göre ekstra hafif bir avantaja sahip olur)
-    if f_season and r["season"] in selected_priority_seasons:
+    if f_season and selected_priority_seasons and r["season"] in selected_priority_seasons:
         if r["season"] == "Kış (FW)":
             score += season_bonus
         elif r["season"] == "Multi Sezon":
@@ -812,7 +805,6 @@ if st.session_state.get(last_filters_key) != current_filters_hash:
     else:
         df["Hesaplanan Skor"] = df.apply(compute_combined_score, axis=1)
         
-        # ❄️ Kış ve Multi Sezonu Eşit Dönüşümlü Harmanlama
         if enable_fw_multi_interleaving:
             df_sorted = interleave_fw_and_multi(df)
         else:
@@ -871,7 +863,6 @@ with c_srch:
 with c_view:
     view_mode = st.radio("Görünüm Modu:", ["🎨 Görsel Vitrin (Sortmax)", "📋 Klasik Tablo"], horizontal=True)
 
-# Arama Filtrelemesi
 grid_df = df_sorted.copy()
 if filter_q:
     fq = filter_q.strip().lower()
