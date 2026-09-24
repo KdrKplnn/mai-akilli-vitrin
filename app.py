@@ -605,15 +605,15 @@ if df_raw.empty:
 session_key = f"orig_{selected_col_id}"
 working_key = f"working_{selected_col_id}"
 
+# Sadece orijinal ham yedek yoksa oluştur (working_key filtre motoruna bırakılır)
 if (session_key not in st.session_state) or (len(st.session_state[session_key]) != len(df_raw)):
     df_backup = df_raw.copy()
     df_backup["Mevcut Sıra"] = df_backup.index + 1
     st.session_state[session_key] = df_backup
-    st.session_state[working_key] = df_backup.copy()
 
 st.sidebar.divider()
 
-# --- 🚀 HIZLI STRATEJİLER (HEPSİ VARSAYILAN OLARAK KAPALI) ---
+# --- 🚀 HIZLI STRATEJİLER ---
 st.sidebar.subheader("⚡ Hızlı Filtreleme & Öncelikler")
 st.sidebar.caption("İstediğin filtreleri açarak yeni sıralamayı oluşturabilirsin:")
 
@@ -632,7 +632,7 @@ if f_season:
         default=[]
     )
 
-# --- 🏷️ KOLEKSİYON ÖNCELİĞİ (VARSAYILAN: KAPALI) ---
+# --- 🏷️ KOLEKSİYON ÖNCELİĞİ ---
 st.sidebar.divider()
 st.sidebar.subheader("🏷️ Koleksiyon Önceliği")
 f_collection_priority = st.sidebar.checkbox("🏷️ Seçili Koleksiyonlardaki Ürünler Öne Çıksın", value=False)
@@ -647,7 +647,7 @@ if f_collection_priority:
         placeholder="Örn: New Form, Arrival, Triko..."
     )
 
-# --- ❄️ SEZON HARMANLAMA & T-SHIRT (VARSAYILAN: KAPALI) ---
+# --- ❄️ SEZON HARMANLAMA & T-SHIRT ---
 st.sidebar.divider()
 st.sidebar.subheader("❄️ Sezon Harmanlama")
 enable_fw_multi_interleaving = st.sidebar.checkbox(
@@ -664,7 +664,7 @@ protect_page1_tshirts = st.sidebar.checkbox(
 
 st.sidebar.divider()
 
-# --- VİTRİN HİJYENİ VE KORUMA (VARSAYILAN: KAPALI) ---
+# --- VİTRİN HİJYENİ VE KORUMA ---
 st.sidebar.subheader("🛡️ Vitrin Kuralları")
 push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=False)
 enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgarada Model/Renk Ayrıştır", value=False)
@@ -774,11 +774,12 @@ other_active_rules = any([
 ])
 
 any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
-current_filters_hash = f"{any_active}_{f_sales}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{col_bonus}_{f_season}_{selected_priority_seasons}_{enable_fw_multi_interleaving}_{protect_page1_tshirts}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
+# Koleksiyon kimliğini filtre kontrolüne ekleyerek koleksiyon değişimlerinde otomatik tetikleme sağlanır
+current_filters_hash = f"{selected_col_id}_{any_active}_{f_sales}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{col_bonus}_{f_season}_{selected_priority_seasons}_{enable_fw_multi_interleaving}_{protect_page1_tshirts}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
-# Sadece kullanıcı sol filtrelerden birini değiştirdiğinde otomatik yeniden sırala
-if st.session_state.get(last_filters_key) != current_filters_hash:
+# Koleksiyon değiştiğinde veya sol filtrelerden biri değiştiğinde otomatik sırala
+if (st.session_state.get(last_filters_key) != current_filters_hash) or (working_key not in st.session_state):
     st.session_state[last_filters_key] = current_filters_hash
     
     if uploaded_backup is not None:
