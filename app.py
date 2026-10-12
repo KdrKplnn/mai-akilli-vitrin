@@ -447,7 +447,6 @@ def diversify_grid_4(df_in, lookback=4, seed_offset=0):
     
     # Haftalık Dinamik Rotasyon Kaydırması
     if seed_offset > 0 and len(in_stock) > 4:
-        # En üstteki 2 ürünü koru, sonraki benzer skorluları haftalık olarak kaydır
         head = in_stock[:2]
         tail = in_stock[2:]
         shift = seed_offset % len(tail)
@@ -749,12 +748,19 @@ f_collection_priority = st.sidebar.checkbox("🏷️ Seçili Koleksiyonlardaki �
 
 all_store_collections = sorted(list(set([c["title"] for c in collections])))
 selected_priority_collections = []
+pin_collection_to_top = False
+
 if f_collection_priority:
     selected_priority_collections = st.sidebar.multiselect(
         "Öne Gelecek Koleksiyonları Belirleyin:",
         options=all_store_collections,
         default=[],
         placeholder="Örn: New Form, Arrival, Triko..."
+    )
+    pin_collection_to_top = st.sidebar.checkbox(
+        "👑 Bu Koleksiyondaki Ürünleri En Başa Sabitle (Tepeye Kitle)",
+        value=True,
+        help="Seçili koleksiyondaki ürünleri puanına bakmaksızın vitrinin 1. sırasından itibaren en tepeye koyar. 'Yeni gelen ürün neden ilk sırada yok?' sorununu anında çözer."
     )
 
 # --- ❄️ SEZON HARMANLAMA & T-SHIRT ---
@@ -796,7 +802,7 @@ with st.sidebar.expander("🛠️ Detaylı Ağırlık ve Ceza Ayarları"):
     stock_weight = st.slider("Stok Hacmi Ağırlığı (%)", 0, 100, 35) if f_stock else 0
     new_weight = st.slider("En Son Eklenen Önceliği (%)", 0, 100, 40) if f_new else 0
     recent_stock_weight = st.slider("En Son Stok Güncelleme Önceliği (%)", 0, 100, 30) if f_recent_stock else 0
-    col_bonus = st.slider("Koleksiyon Öncelik Bonusu", 0, 100, 40) if (f_collection_priority and selected_priority_collections) else 0
+    col_bonus = st.slider("Koleksiyon Öncelik Bonusu", 0, 100, 40) if (f_collection_priority and selected_priority_collections and not pin_collection_to_top) else 0
         
     if f_season and selected_priority_seasons:
         season_bonus = st.slider("Sezon Bonusu", 0, 100, 35)
@@ -883,7 +889,7 @@ def compute_combined_score(r):
     if f_recent_stock:
         score += (r.get("recent_stock_score", 0.0)) * (recent_stock_weight / 100.0)
         
-    if f_collection_priority and selected_priority_collections:
+    if f_collection_priority and selected_priority_collections and not pin_collection_to_top:
         if any(c in r.get("member_collections", []) for c in selected_priority_collections):
             score += col_bonus
             
@@ -909,7 +915,7 @@ other_active_rules = any([
 ])
 
 any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
-current_filters_hash = f"{selected_col_id}_{any_active}_{f_sales}_{sales_time_window}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{col_bonus}_{f_season}_{selected_priority_seasons}_{enable_fw_multi_interleaving}_{protect_page1_tshirts}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}_{enable_weekly_rotation}"
+current_filters_hash = f"{selected_col_id}_{any_active}_{f_sales}_{sales_time_window}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{pin_collection_to_top}_{col_bonus}_{f_season}_{selected_priority_seasons}_{enable_fw_multi_interleaving}_{protect_page1_tshirts}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}_{enable_weekly_rotation}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
 # Koleksiyon değiştiğinde veya sol filtrelerden biri değiştiğinde otomatik sırala
@@ -950,6 +956,24 @@ if (st.session_state.get(last_filters_key) != current_filters_hash) or (working_
             else:
                 df_sorted = df.sort_values(by="Hesaplanan Skor", ascending=False).reset_index(drop=True)
 
+        # 👑 SEÇİLİ KOLEKSİYONU EN TEPEYE SABİTLEME (PIN TO TOP)
+        if f_collection_priority and selected_priority_collections and pin_collection_to_top:
+            is_priority = df_sorted["member_collections"].apply(
+                lambda col_list: any(c in col_list for c in selected_priority_collections) if isinstance(col_list, list) else False
+            )
+            priority_group = df_sorted[is_priority]
+            other_group = df_sorted[~is_priority]
+            
+            p_in = priority_group[priority_group["total_stock"] > 0]
+            p_out = priority_group[priority_group["total_stock"] <= 0]
+            o_in = other_group[other_group["total_stock"] > 0]
+            o_out = other_group[other_group["total_stock"] <= 0]
+            
+            if push_out_of_stock:
+                df_sorted = pd.concat([p_in, o_in, p_out, o_out]).reset_index(drop=True)
+            else:
+                df_sorted = pd.concat([priority_group, other_group]).reset_index(drop=True)
+
     # 1. Sayfadan T-Shirt'leri Koruma
     if protect_page1_tshirts:
         in_s = df_sorted[df_sorted["total_stock"] > 0]
@@ -980,7 +1004,9 @@ if f_sales: active_badges.append(f"🔥 Çok Satanlar ({sales_time_window.split(
 if f_stock: active_badges.append("📦 Bol Stoklular")
 if f_new: active_badges.append("✨ En Son Eklenenler")
 if f_recent_stock: active_badges.append("🔄 Stoğu En Son Güncellenenler")
-if f_collection_priority and selected_priority_collections: active_badges.append(f"🏷️ Koleksiyon: {', '.join(selected_priority_collections)}")
+if f_collection_priority and selected_priority_collections:
+    pin_txt = " (👑 Tepeye Sabitli)" if pin_collection_to_top else ""
+    active_badges.append(f"🏷️ Koleksiyon: {', '.join(selected_priority_collections)}{pin_txt}")
 if f_season and selected_priority_seasons: active_badges.append(f"❄️/☀️ Sezon: {', '.join(selected_priority_seasons)}")
 if enable_fw_multi_interleaving: active_badges.append("🔄 1 FW - 1 Multi Harmanlama")
 if protect_page1_tshirts: active_badges.append("🛡️ T-Shirt 1. Sayfa Koruması")
@@ -1287,7 +1313,7 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
                     <div class="img-container">
                         <input type="text" class="badge-order-input" value="#${{p.actual_rank}}" title="Yeni sıra numarasını yazıp Enter'a basın" onclick="event.stopPropagation();" />
                         ${{discountBadge}}
-                        ${{p.image ? `<img src="${{p.image}}" loading="lazy" />` : '<span style="color:#94a3b8;font-size:10px;">Görsel Yok</span>'}}
+                        ${{p.image ? `<img src="\${{p.image}}" loading="lazy" />` : '<span style="color:#94a3b8;font-size:10px;">Görsel Yok</span>'}}
                     </div>
                     <div class="card-details">
                         <div class="product-title" title="${{p.title}}">${{p.title}}</div>
