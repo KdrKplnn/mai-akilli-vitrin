@@ -115,7 +115,7 @@ COLORS_LIST = [
 
 GENERIC_CATEGORY_WORDS = {
     "GOMLEK", "SORT", "TAKIM", "PANTOLON", "ELBISE", "ETEK", "CEKET", "BLUZ", "TOP", 
-    "TRIKO", "YELEK", "HIRKA", "KABAN", "MONT", "BODY", "TULUM", "KIMONO", "SWEATSHIRT"
+    "TRIKO", "YELEK", "HIRKA", "KABAN", "MONT", "BODY", "TULUM", "KIMONO", "SWEATSHIRT", "BOMBER"
 }
 
 def turkish_upper(text):
@@ -185,7 +185,7 @@ def detect_main_category(title, tags):
         return "KAZAK_TRIKO"
     if any(k in txt for k in ["PANTOLON", "JEAN"]):
         return "PANTOLON"
-    if any(k in txt for k in ["BLAZER", "CEKET", "KABAN", "MONT", "TRENÇ", "TRENC", "YELEK"]):
+    if any(k in txt for k in ["BLAZER", "CEKET", "KABAN", "MONT", "TRENÇ", "TRENC", "YELEK", "BOMBER"]):
         return "CEKET_BLAZER"
     if any(k in txt for k in ["ELBISE", "ETEK"]):
         return "ELBISE_ETEK"
@@ -243,7 +243,6 @@ def get_collection_data_fast(collection_id):
     has_next_page = True
     cursor = None
 
-    # collections(first: 50) ile ürünün ait olduğu tüm koleksiyonları eksiksiz alıyoruz
     query_manual = """
     query getCollectionProducts($id: ID!, $cursor: String) {
       collection(id: $id) {
@@ -450,6 +449,7 @@ def diversify_grid_4(df_in, lookback=4, seed_offset=0):
         
         chosen_idx = None
         
+        # 1. Aşama: Model, Kategori ve Renk Çakışmasın
         for i, item in enumerate(in_stock):
             m_ok = item.get("model_base") not in recent_models
             cat_ok = item.get("main_category") not in recent_categories
@@ -458,6 +458,7 @@ def diversify_grid_4(df_in, lookback=4, seed_offset=0):
                 chosen_idx = i
                 break
         
+        # 2. Aşama: Model ve Renk Çakışmasın
         if chosen_idx is None:
             for i, item in enumerate(in_stock):
                 m_ok = item.get("model_base") not in recent_models
@@ -466,6 +467,7 @@ def diversify_grid_4(df_in, lookback=4, seed_offset=0):
                     chosen_idx = i
                     break
                     
+        # 3. Aşama: Model ve Kategori Çakışmasın
         if chosen_idx is None:
             for i, item in enumerate(in_stock):
                 m_ok = item.get("model_base") not in recent_models
@@ -474,12 +476,14 @@ def diversify_grid_4(df_in, lookback=4, seed_offset=0):
                     chosen_idx = i
                     break
         
+        # 4. Aşama: Sadece Model Çakışmasın (Aynı model Liora üst üste gelmesin!)
         if chosen_idx is None:
             for i, item in enumerate(in_stock):
                 if item.get("model_base") not in recent_models:
                     chosen_idx = i
                     break
         
+        # 5. Aşama: En son eklenenle birebir aynı model olmasın
         if chosen_idx is None and len(result) > 0:
             last_m = result[-1].get("model_base")
             for i, item in enumerate(in_stock):
@@ -743,7 +747,7 @@ if f_collection_priority:
     pin_collection_to_top = st.sidebar.checkbox(
         "👑 Bu Koleksiyondaki Ürünleri En Başa Sabitle (Tepeye Kitle)",
         value=True,
-        help="Seçili koleksiyondaki stoklu ürünleri hiçbir kurala veya sezona takılmadan doğrudan 1. sıradan itibaren en tepeye dizer."
+        help="Seçili koleksiyondaki stoklu ürünleri ön sıralara taşır. 4'lü Izgara açıkken Liora gibi aynı modellerin arasına diğer ürünleri harmanlayarak dizilim yapar."
     )
 
 # --- ❄️ SEZON HARMANLAMA & T-SHIRT ---
@@ -828,7 +832,7 @@ if enable_exclude and excluded_keywords:
 if f_discount and min_discount_filter > 0:
     df = df[df["discount_pct"] >= min_discount_filter]
 
-# Satış Skoru Entegrasyonu (Dinamik Siparişler veya Dosya)
+# Satış Skoru Entegrasyonu
 df["file_sales"] = 0
 if sales_file:
     try:
@@ -861,7 +865,6 @@ elif f_sales:
 
 max_stock = df["total_stock"].max() if df["total_stock"].max() > 0 else 1
 
-# Koleksiyon eşleştirmesi için yardımcı fonksiyon (Türkçe büyük harf duyarsız)
 def check_in_priority_collections(col_list, targets):
     if not isinstance(col_list, list) or not targets:
         return False
@@ -911,7 +914,7 @@ any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
 current_filters_hash = f"{selected_col_id}_{any_active}_{f_sales}_{sales_time_window}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{pin_collection_to_top}_{col_bonus}_{f_season}_{selected_priority_seasons}_{enable_fw_multi_interleaving}_{protect_page1_tshirts}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}_{enable_weekly_rotation}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
-# Koleksiyon değiştiğinde veya sol filtrelerden biri değiştiğinde otomatik sırala
+# Koleksiyon değiştiğinde veya filtreler güncellendiğinde sırala
 if (st.session_state.get(last_filters_key) != current_filters_hash) or (working_key not in st.session_state):
     st.session_state[last_filters_key] = current_filters_hash
     
@@ -960,13 +963,7 @@ if (st.session_state.get(last_filters_key) != current_filters_hash) or (working_
             merged_rest = pd.concat([rest, tshirts]).sort_values(by="Hesaplanan Skor", ascending=False)
             df_sorted = pd.concat([page1, merged_rest, out_s]).reset_index(drop=True)
 
-        # 4'lü Izgara & Renk Ayrıştırma & Haftalık Dinamik Rotasyon
-        if enable_clustering_fix and uploaded_backup is None:
-            seed = datetime.now().isocalendar()[1] if enable_weekly_rotation else 0
-            df_sorted = diversify_grid_4(df_sorted, lookback=4, seed_offset=seed)
-
-        # 👑 KESİN VIP TEPE KİLİDİ (PIN TO TOP): EN SON VE TAVİZ VERİLMEZ ADIM
-        # Diğer tüm kuralların ardından, seçili koleksiyondaki stoklu ürünleri doğrudan 1. sıradan başlayacak şekilde tepede kilitler!
+        # 👑 AKILLI VIP TEPE KİLİDİ & 4'LÜ IZGARA AYRIŞTIRMA MOTORU
         if f_collection_priority and selected_priority_collections and pin_collection_to_top:
             is_priority = df_sorted["member_collections"].apply(
                 lambda col_list: check_in_priority_collections(col_list, selected_priority_collections)
@@ -977,11 +974,36 @@ if (st.session_state.get(last_filters_key) != current_filters_hash) or (working_
             o_in = df_sorted[~is_priority & (df_sorted["total_stock"] > 0)]
             o_out = df_sorted[~is_priority & (df_sorted["total_stock"] <= 0)]
             
-            if push_out_of_stock:
-                # 1. Sırada Seçili Koleksiyon Stokluları -> 2. Sırada Diğer Stoklular -> 3. Sırada Tükenenler
-                df_sorted = pd.concat([p_in, o_in, p_out, o_out]).reset_index(drop=True)
+            if enable_clustering_fix:
+                # 4'lü Izgara açıkken Liora'ların arka arkaya gelmesini engelle:
+                # Öncelikli ürünlere yüksek sanal skor verip havuzda en öne alıyoruz,
+                # diversify_grid_4 motoru aynı modelleri (Liora) diğer ürünlerle harmanlayarak araya açıyor!
+                p_in_copy = p_in.copy()
+                o_in_copy = o_in.copy()
+                p_in_copy["vip_temp_score"] = 1000 + p_in_copy.get("Hesaplanan Skor", 0)
+                o_in_copy["vip_temp_score"] = o_in_copy.get("Hesaplanan Skor", 0)
+                
+                merged_in = pd.concat([p_in_copy, o_in_copy]).sort_values(by="vip_temp_score", ascending=False)
+                seed = datetime.now().isocalendar()[1] if enable_weekly_rotation else 0
+                
+                df_sorted_in = diversify_grid_4(merged_in, lookback=4, seed_offset=seed)
+                df_sorted_in = df_sorted_in.drop(columns=["vip_temp_score"], errors="ignore")
+                
+                if push_out_of_stock:
+                    df_sorted = pd.concat([df_sorted_in, p_out, o_out]).reset_index(drop=True)
+                else:
+                    df_sorted = pd.concat([df_sorted_in, pd.concat([p_out, o_out])]).reset_index(drop=True)
             else:
-                df_sorted = pd.concat([p_in, p_out, o_in, o_out]).reset_index(drop=True)
+                # 4'lü Izgara kapalıysa blok halinde en tepeye kitle
+                if push_out_of_stock:
+                    df_sorted = pd.concat([p_in, o_in, p_out, o_out]).reset_index(drop=True)
+                else:
+                    df_sorted = pd.concat([p_in, p_out, o_in, o_out]).reset_index(drop=True)
+        else:
+            # Normal 4'lü Izgara Ayrıştırma
+            if enable_clustering_fix and uploaded_backup is None:
+                seed = datetime.now().isocalendar()[1] if enable_weekly_rotation else 0
+                df_sorted = diversify_grid_4(df_sorted, lookback=4, seed_offset=seed)
 
     st.session_state[working_key] = df_sorted
 
