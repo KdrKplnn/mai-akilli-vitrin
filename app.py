@@ -4,6 +4,7 @@ import requests
 import time
 import re
 import json
+from datetime import datetime, timedelta
 import streamlit.components.v1 as components
 
 # --- SAYFA YAPILANDIRMASI ---
@@ -203,6 +204,48 @@ def detect_main_category(title, tags):
         
     return "DIGER_STANDART"
 
+# --- ZAMAN PENCERELİ CANLI SİPARİŞ SATIŞLARINI ÇEKME ---
+@st.cache_data(ttl=300)
+def fetch_recent_sales_quantities(days=7):
+    """Shopify'dan son N günde tamamlanan (paid) siparişleri çekip ürün bazında satılan toplam adetleri döner."""
+    if not days or days <= 0:
+        return {}
+    
+    since_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+    query = f"""
+    {{
+      orders(first: 250, query: "created_at:>='{since_date}' and financial_status:paid") {{
+        edges {{
+          node {{
+            lineItems(first: 50) {{
+              edges {{
+                node {{
+                  quantity
+                  product {{
+                    id
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}
+      }}
+    }}
+    """
+    res = run_graphql_query(query)
+    sales_map = {}
+    if res and "data" in res and "orders" in res["data"]:
+        orders = res["data"]["orders"].get("edges", [])
+        for ord_edge in orders:
+            line_items = ord_edge.get("node", {}).get("lineItems", {}).get("edges", [])
+            for item_edge in line_items:
+                node = item_edge.get("node", {})
+                prod = node.get("product")
+                if prod and prod.get("id"):
+                    pid = prod["id"]
+                    sales_map[pid] = sales_map.get(pid, 0) + node.get("quantity", 0)
+    return sales_map
+
 # --- 2. ÜRÜNLERİ, GÖRSELLERİ VE METAFIELD'LARI ÇEKME ---
 @st.cache_data(ttl=120)
 def get_collection_data_fast(collection_id):
@@ -397,36 +440,68 @@ def get_collection_data_fast(collection_id):
     df_res["shopify_sales_score"] = df_res["product_id"].map(best_selling_order).fillna(20.0)
     return df_res
 
-# --- 3. GELİŞMİŞ 4'LÜ IZGARA MODEL/RENK AYRIŞTIRMA MOTORU ---
-def diversify_grid_4(df_in, lookback=4):
+# --- 3. GELİŞMİŞ 4'LÜ IZGARA KATEGORİ, MODEL VE RENK AYRIŞTIRMA MOTORU ---
+def diversify_grid_4(df_in, lookback=4, seed_offset=0):
     in_stock = df_in[df_in["total_stock"] > 0].to_dict("records")
     out_of_stock = df_in[df_in["total_stock"] <= 0].to_dict("records")
+    
+    # Haftalık Dinamik Rotasyon Kaydırması
+    if seed_offset > 0 and len(in_stock) > 4:
+        # En üstteki 2 ürünü koru, sonraki benzer skorluları haftalık olarak kaydır
+        head = in_stock[:2]
+        tail = in_stock[2:]
+        shift = seed_offset % len(tail)
+        in_stock = head + tail[shift:] + tail[:shift]
+        
     result = []
     
     while in_stock:
         recent_window = result[-lookback:] if len(result) >= lookback else result
-        recent_models = [r["model_base"] for r in recent_window]
-        recent_colors = [r["color"] for r in recent_window if r["color"] != "DIGER"]
+        recent_models = [r.get("model_base") for r in recent_window]
+        recent_categories = [r.get("main_category") for r in recent_window]
+        recent_colors = [r.get("color") for r in recent_window if r.get("color") != "DIGER"]
         
         chosen_idx = None
         
+        # 1. Aşama: Model, Kategori ve Renk Çakışmasın (İdeal 4'lü Izgara)
         for i, item in enumerate(in_stock):
-            m_ok = item["model_base"] not in recent_models
-            c_ok = (item["color"] == "DIGER") or (item["color"] not in recent_colors)
-            if m_ok and c_ok:
+            m_ok = item.get("model_base") not in recent_models
+            cat_ok = item.get("main_category") not in recent_categories
+            c_ok = (item.get("color") == "DIGER") or (item.get("color") not in recent_colors)
+            if m_ok and cat_ok and c_ok:
                 chosen_idx = i
                 break
         
+        # 2. Aşama: Model ve Renk Çakışmasın (Kategori esnetilebilir)
         if chosen_idx is None:
             for i, item in enumerate(in_stock):
-                if item["model_base"] not in recent_models:
+                m_ok = item.get("model_base") not in recent_models
+                c_ok = (item.get("color") == "DIGER") or (item.get("color") not in recent_colors)
+                if m_ok and c_ok:
+                    chosen_idx = i
+                    break
+                    
+        # 3. Aşama: Model ve Kategori Çakışmasın (Renk esnetilebilir)
+        if chosen_idx is None:
+            for i, item in enumerate(in_stock):
+                m_ok = item.get("model_base") not in recent_models
+                cat_ok = item.get("main_category") not in recent_categories
+                if m_ok and cat_ok:
                     chosen_idx = i
                     break
         
-        if chosen_idx is None and len(result) > 0:
-            last_m = result[-1]["model_base"]
+        # 4. Aşama: Sadece Model Çakışmasın
+        if chosen_idx is None:
             for i, item in enumerate(in_stock):
-                if item["model_base"] != last_m:
+                if item.get("model_base") not in recent_models:
+                    chosen_idx = i
+                    break
+        
+        # 5. Aşama: En son eklenenle birebir aynı model olmasın
+        if chosen_idx is None and len(result) > 0:
+            last_m = result[-1].get("model_base")
+            for i, item in enumerate(in_stock):
+                if item.get("model_base") != last_m:
                     chosen_idx = i
                     break
                     
@@ -644,6 +719,15 @@ st.sidebar.subheader("⚡ Hızlı Filtreleme & Öncelikler")
 st.sidebar.caption("İstediğin filtreleri açarak yeni sıralamayı oluşturabilirsin:")
 
 f_sales = st.sidebar.checkbox("🔥 Çok Satanlar Öne Çıksın", value=False)
+sales_time_window = "Tüm Zamanlar"
+if f_sales:
+    sales_time_window = st.sidebar.selectbox(
+        "⏱️ Çok Satanlar Zaman Penceresi:",
+        options=["Son 7 Gün (Haftalık Çok Satan)", "Son 30 Gün (Aylık Çok Satan)", "Tüm Zamanlar"],
+        index=0,
+        help="Shopify siparişlerini anlık analiz ederek son 7 veya 30 günde en çok satan ürünleri zirveye taşır."
+    )
+
 f_stock = st.sidebar.checkbox("📦 Bol Stoklular Öne Çıksın (Bedene Bakmadan)", value=False)
 f_new = st.sidebar.checkbox("✨ En Son Eklenenler Öne Çıksın (Dinamik)", value=False)
 f_recent_stock = st.sidebar.checkbox("🔄 Stoğu En Son Güncellenenler Öne Çıksın", value=False)
@@ -693,7 +777,16 @@ st.sidebar.divider()
 # --- VİTRİN HİJYENİ VE KORUMA ---
 st.sidebar.subheader("🛡️ Vitrin Kuralları")
 push_out_of_stock = st.sidebar.checkbox("🚫 Tükenenleri (0 Stok) En Sona At", value=False)
-enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgara Ayrıştırma", value=False)
+enable_clustering_fix = st.sidebar.checkbox("🎨 4'lü Izgara Ayrıştırma (Kategori & Renk)", value=False, help="Yan yana gelen ürünlerin aynı kategori veya aynı renk olmasını önler.")
+
+enable_weekly_rotation = False
+if enable_clustering_fix:
+    enable_weekly_rotation = st.sidebar.checkbox(
+        "🔄 Haftalık Dinamik Rotasyon", 
+        value=True, 
+        help="Aynı filtre açık kalsa bile takvim haftasına göre benzer skorlu ürünlerin yerini dinamik kaydırarak vitrini canlı tutar."
+    )
+
 enable_broken_penalty = st.sidebar.checkbox("⚠️ Kırık Bedenleri Cezalandır", value=False)
 enable_single_penalty = st.sidebar.checkbox("⚠️ Tek Beden Kalanları Cezalandır", value=False)
 
@@ -746,6 +839,7 @@ if enable_exclude and excluded_keywords:
 if f_discount and min_discount_filter > 0:
     df = df[df["discount_pct"] >= min_discount_filter]
 
+# Satış Skoru Entegrasyonu (Dinamik Siparişler veya Dosya)
 df["file_sales"] = 0
 if sales_file:
     try:
@@ -760,6 +854,21 @@ if sales_file:
             st.sidebar.success("✅ Satış raporu entegre edildi!")
     except Exception:
         pass
+elif f_sales:
+    days_to_fetch = 0
+    if "7 Gün" in sales_time_window:
+        days_to_fetch = 7
+    elif "30 Gün" in sales_time_window:
+        days_to_fetch = 30
+        
+    if days_to_fetch > 0:
+        recent_sales = fetch_recent_sales_quantities(days=days_to_fetch)
+        df["recent_qty"] = df["product_id"].map(recent_sales).fillna(0)
+        max_q = df["recent_qty"].max()
+        if max_q > 0:
+            df["shopify_sales_score"] = (df["recent_qty"] / max_q) * 100.0
+        else:
+            df["shopify_sales_score"] = 10.0
 
 max_stock = df["total_stock"].max() if df["total_stock"].max() > 0 else 1
 
@@ -800,7 +909,7 @@ other_active_rules = any([
 ])
 
 any_active = other_active_rules or push_out_of_stock or enable_clustering_fix
-current_filters_hash = f"{selected_col_id}_{any_active}_{f_sales}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{col_bonus}_{f_season}_{selected_priority_seasons}_{enable_fw_multi_interleaving}_{protect_page1_tshirts}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}"
+current_filters_hash = f"{selected_col_id}_{any_active}_{f_sales}_{sales_time_window}_{f_stock}_{f_new}_{new_weight}_{f_recent_stock}_{recent_stock_weight}_{f_collection_priority}_{selected_priority_collections}_{col_bonus}_{f_season}_{selected_priority_seasons}_{enable_fw_multi_interleaving}_{protect_page1_tshirts}_{f_discount}_{enable_broken_penalty}_{enable_single_penalty}_{push_out_of_stock}_{enable_clustering_fix}_{enable_weekly_rotation}"
 last_filters_key = f"filters_hash_{selected_col_id}"
 
 # Koleksiyon değiştiğinde veya sol filtrelerden biri değiştiğinde otomatik sırala
@@ -841,8 +950,21 @@ if (st.session_state.get(last_filters_key) != current_filters_hash) or (working_
             else:
                 df_sorted = df.sort_values(by="Hesaplanan Skor", ascending=False).reset_index(drop=True)
 
+    # 1. Sayfadan T-Shirt'leri Koruma
+    if protect_page1_tshirts:
+        in_s = df_sorted[df_sorted["total_stock"] > 0]
+        out_s = df_sorted[df_sorted["total_stock"] <= 0]
+        tshirts = in_s[in_s["main_category"] == "TSHIRT_KISAKOL"]
+        non_tshirts = in_s[in_s["main_category"] != "TSHIRT_KISAKOL"]
+        page1 = non_tshirts.iloc[:24]
+        rest = non_tshirts.iloc[24:]
+        merged_rest = pd.concat([rest, tshirts]).sort_values(by="Hesaplanan Skor", ascending=False)
+        df_sorted = pd.concat([page1, merged_rest, out_s]).reset_index(drop=True)
+
+    # 4'lü Izgara & Renk Ayrıştırma & Haftalık Dinamik Rotasyon
     if enable_clustering_fix and uploaded_backup is None:
-        df_sorted = diversify_grid_4(df_sorted, lookback=4)
+        seed = datetime.now().isocalendar()[1] if enable_weekly_rotation else 0
+        df_sorted = diversify_grid_4(df_sorted, lookback=4, seed_offset=seed)
 
     st.session_state[working_key] = df_sorted
 
@@ -854,7 +976,7 @@ df_sorted["Planlanan Sıra"] = df_sorted.index + 1
 st.title(f"🛍️ {selected_col_label.split(' (')[0]}")
 
 active_badges = []
-if f_sales: active_badges.append("🔥 Çok Satanlar")
+if f_sales: active_badges.append(f"🔥 Çok Satanlar ({sales_time_window.split(' ')[0]})")
 if f_stock: active_badges.append("📦 Bol Stoklular")
 if f_new: active_badges.append("✨ En Son Eklenenler")
 if f_recent_stock: active_badges.append("🔄 Stoğu En Son Güncellenenler")
@@ -864,7 +986,7 @@ if enable_fw_multi_interleaving: active_badges.append("🔄 1 FW - 1 Multi Harma
 if protect_page1_tshirts: active_badges.append("🛡️ T-Shirt 1. Sayfa Koruması")
 if f_discount: active_badges.append("🏷️ İndirim Oranı")
 if push_out_of_stock: active_badges.append("🚫 0 Stok Sonda")
-if enable_clustering_fix: active_badges.append("🎨 4'lü Izgara Ayrıştırma")
+if enable_clustering_fix: active_badges.append("🎨 4'lü Izgara Ayrıştırma (Kategori & Renk)")
 
 if active_badges:
     st.success(f"⚡ **Aktif Filtreler:** {' + '.join(active_badges)}")
@@ -1242,8 +1364,8 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     </html>
     """
     
-    estimated_height = max(550, (len(cards_data) // 4 + 1) * 180)
-    components.html(html_code, height=min(estimated_height, 1300), scrolling=True)
+    estimated_height = max(600, (len(cards_data) // 4 + 1) * 200)
+    components.html(html_code, height=estimated_height, scrolling=True)
 
 else:
     # 📋 Klasik Tablo Modu
@@ -1254,7 +1376,7 @@ else:
     st.dataframe(
         grid_df[display_cols],
         use_container_width=True,
-        height=450,
+        height=650,
         column_config={
             "image": st.column_config.ImageColumn("Görsel", width="small"),
             "Planlanan Sıra": st.column_config.NumberColumn("Planlanan", width="small"),
