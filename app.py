@@ -17,7 +17,7 @@ st.set_page_config(
 # --- CSS STİLLERİ ---
 st.markdown("""
 <style>
-    [data-testid="stDataFrame"] img {
+    [data-testid="stDataFrame"] img, [data-testid="stDataEditor"] img {
         height: 100% !important;
         max-height: 48px !important;
         width: auto !important;
@@ -143,9 +143,7 @@ def extract_model_base(title):
     raw_words = clean_alphanumeric.split()
     return raw_words[0] if raw_words else "GENEL"
 
-# --- 🎯 HATASIZ SEZON TESPİT MOTORU ---
 def detect_season_robust(meta_val, tags_list):
-    # 1. Metafield Sezon Alanı
     if meta_val:
         m = turkish_upper(str(meta_val).strip())
         if "MULTI" in m:
@@ -155,10 +153,7 @@ def detect_season_robust(meta_val, tags_list):
         if any(k in m for k in ["YAZ", "SS", "SUMMER", "SPRING"]):
             return "Yaz (SS)"
 
-    # 2. Etiketler (Tags)
     text = turkish_upper(" ".join([str(t) for t in tags_list]))
-    
-    # Etikette MULTI geçiyorsa doğrudan Multi Sezondur
     if "MULTI SEZON" in text or "MULTI" in text:
         return "Multi Sezon"
         
@@ -179,14 +174,11 @@ def detect_main_category(title, tags):
     
     if any(k in txt for k in ["SUTYEN", "KULOT", "CORAP", "IC CAMASIR", "BIKINI", "MAYO", "MAYOKINI", "TERLIK", "SANDALET", "AYAKKABI", "BOT", "CIZME", "SAPKA"]):
         return "ALT_SEGMENT"
-    
     if any(k in txt for k in ["T-SHIRT", "TSHIRT", "TISORT", "TIŞÖRT", "T-SHİRT", "KISA KOL"]):
         return "TSHIRT_KISAKOL"
-        
     summer_types = ["CROP", "ASKILI", "BUSTIYER", "SORT", "KOLSUZ", "HALTER", "STRAPLEZ", "MINI", "BERMUDA", "KETEN"]
     if any(k in txt for k in summer_types) and not any(k in txt for k in ["ESOFMAN"]):
         return "YAZLIK_ACIK"
-        
     if any(k in txt for k in ["ESOFMAN", "SWEATPANTS", "JOGGER", "HOODIE"]):
         return "ESOFMAN_TAKIM"
     if any(k in txt for k in ["KAZAK", "TRIKO", "HIRKA", "SWEATSHIRT", "POLAR"]):
@@ -204,10 +196,8 @@ def detect_main_category(title, tags):
         
     return "DIGER_STANDART"
 
-# --- ZAMAN PENCERELİ CANLI SİPARİŞ SATIŞLARINI ÇEKME ---
 @st.cache_data(ttl=300)
 def fetch_recent_sales_quantities(days=7):
-    """Shopify'dan son N günde tamamlanan (paid) siparişleri çekip ürün bazında satılan toplam adetleri döner."""
     if not days or days <= 0:
         return {}
     
@@ -253,6 +243,7 @@ def get_collection_data_fast(collection_id):
     has_next_page = True
     cursor = None
 
+    # collections(first: 50) ile ürünün ait olduğu tüm koleksiyonları eksiksiz alıyoruz
     query_manual = """
     query getCollectionProducts($id: ID!, $cursor: String) {
       collection(id: $id) {
@@ -272,7 +263,7 @@ def get_collection_data_fast(collection_id):
               seasonMeta: metafield(namespace: "custom", key: "sezon") {
                 value
               }
-              collections(first: 10) {
+              collections(first: 50) {
                 edges {
                   node {
                     id
@@ -316,7 +307,6 @@ def get_collection_data_fast(collection_id):
             p = edge["node"]
             tags = p.get("tags", [])
             variants = edge["node"]["variants"]["edges"]
-            
             meta_season_val = p.get("seasonMeta", {}).get("value") if p.get("seasonMeta") else None
             
             col_edges = p.get("collections", {}).get("edges", [])
@@ -363,7 +353,6 @@ def get_collection_data_fast(collection_id):
             else:
                 size_status = "Tam Beden"
 
-            # Hatasız Sezon Çözücü
             detected_season = detect_season_robust(meta_season_val, tags)
 
             products.append({
@@ -445,7 +434,6 @@ def diversify_grid_4(df_in, lookback=4, seed_offset=0):
     in_stock = df_in[df_in["total_stock"] > 0].to_dict("records")
     out_of_stock = df_in[df_in["total_stock"] <= 0].to_dict("records")
     
-    # Haftalık Dinamik Rotasyon Kaydırması
     if seed_offset > 0 and len(in_stock) > 4:
         head = in_stock[:2]
         tail = in_stock[2:]
@@ -462,7 +450,6 @@ def diversify_grid_4(df_in, lookback=4, seed_offset=0):
         
         chosen_idx = None
         
-        # 1. Aşama: Model, Kategori ve Renk Çakışmasın (İdeal 4'lü Izgara)
         for i, item in enumerate(in_stock):
             m_ok = item.get("model_base") not in recent_models
             cat_ok = item.get("main_category") not in recent_categories
@@ -471,7 +458,6 @@ def diversify_grid_4(df_in, lookback=4, seed_offset=0):
                 chosen_idx = i
                 break
         
-        # 2. Aşama: Model ve Renk Çakışmasın (Kategori esnetilebilir)
         if chosen_idx is None:
             for i, item in enumerate(in_stock):
                 m_ok = item.get("model_base") not in recent_models
@@ -480,7 +466,6 @@ def diversify_grid_4(df_in, lookback=4, seed_offset=0):
                     chosen_idx = i
                     break
                     
-        # 3. Aşama: Model ve Kategori Çakışmasın (Renk esnetilebilir)
         if chosen_idx is None:
             for i, item in enumerate(in_stock):
                 m_ok = item.get("model_base") not in recent_models
@@ -489,14 +474,12 @@ def diversify_grid_4(df_in, lookback=4, seed_offset=0):
                     chosen_idx = i
                     break
         
-        # 4. Aşama: Sadece Model Çakışmasın
         if chosen_idx is None:
             for i, item in enumerate(in_stock):
                 if item.get("model_base") not in recent_models:
                     chosen_idx = i
                     break
         
-        # 5. Aşama: En son eklenenle birebir aynı model olmasın
         if chosen_idx is None and len(result) > 0:
             last_m = result[-1].get("model_base")
             for i, item in enumerate(in_stock):
@@ -755,12 +738,12 @@ if f_collection_priority:
         "Öne Gelecek Koleksiyonları Belirleyin:",
         options=all_store_collections,
         default=[],
-        placeholder="Örn: New Form, Arrival, Triko..."
+        placeholder="Örn: New Form, IN MOTION, Triko..."
     )
     pin_collection_to_top = st.sidebar.checkbox(
         "👑 Bu Koleksiyondaki Ürünleri En Başa Sabitle (Tepeye Kitle)",
         value=True,
-        help="Seçili koleksiyondaki ürünleri puanına bakmaksızın vitrinin 1. sırasından itibaren en tepeye koyar. 'Yeni gelen ürün neden ilk sırada yok?' sorununu anında çözer."
+        help="Seçili koleksiyondaki stoklu ürünleri hiçbir kurala veya sezona takılmadan doğrudan 1. sıradan itibaren en tepeye dizer."
     )
 
 # --- ❄️ SEZON HARMANLAMA & T-SHIRT ---
@@ -878,6 +861,16 @@ elif f_sales:
 
 max_stock = df["total_stock"].max() if df["total_stock"].max() > 0 else 1
 
+# Koleksiyon eşleştirmesi için yardımcı fonksiyon (Türkçe büyük harf duyarsız)
+def check_in_priority_collections(col_list, targets):
+    if not isinstance(col_list, list) or not targets:
+        return False
+    norm_targets = [turkish_upper(t.strip()) for t in targets]
+    for c in col_list:
+        if turkish_upper(str(c).strip()) in norm_targets:
+            return True
+    return False
+
 def compute_combined_score(r):
     score = 0.0
     if f_sales:
@@ -890,7 +883,7 @@ def compute_combined_score(r):
         score += (r.get("recent_stock_score", 0.0)) * (recent_stock_weight / 100.0)
         
     if f_collection_priority and selected_priority_collections and not pin_collection_to_top:
-        if any(c in r.get("member_collections", []) for c in selected_priority_collections):
+        if check_in_priority_collections(r.get("member_collections", []), selected_priority_collections):
             score += col_bonus
             
     if f_season and selected_priority_seasons and r["season"] in selected_priority_seasons:
@@ -956,39 +949,39 @@ if (st.session_state.get(last_filters_key) != current_filters_hash) or (working_
             else:
                 df_sorted = df.sort_values(by="Hesaplanan Skor", ascending=False).reset_index(drop=True)
 
-        # 👑 SEÇİLİ KOLEKSİYONU EN TEPEYE SABİTLEME (PIN TO TOP)
+        # 1. Sayfadan T-Shirt'leri Koruma
+        if protect_page1_tshirts:
+            in_s = df_sorted[df_sorted["total_stock"] > 0]
+            out_s = df_sorted[df_sorted["total_stock"] <= 0]
+            tshirts = in_s[in_s["main_category"] == "TSHIRT_KISAKOL"]
+            non_tshirts = in_s[in_s["main_category"] != "TSHIRT_KISAKOL"]
+            page1 = non_tshirts.iloc[:24]
+            rest = non_tshirts.iloc[24:]
+            merged_rest = pd.concat([rest, tshirts]).sort_values(by="Hesaplanan Skor", ascending=False)
+            df_sorted = pd.concat([page1, merged_rest, out_s]).reset_index(drop=True)
+
+        # 4'lü Izgara & Renk Ayrıştırma & Haftalık Dinamik Rotasyon
+        if enable_clustering_fix and uploaded_backup is None:
+            seed = datetime.now().isocalendar()[1] if enable_weekly_rotation else 0
+            df_sorted = diversify_grid_4(df_sorted, lookback=4, seed_offset=seed)
+
+        # 👑 KESİN VIP TEPE KİLİDİ (PIN TO TOP): EN SON VE TAVİZ VERİLMEZ ADIM
+        # Diğer tüm kuralların ardından, seçili koleksiyondaki stoklu ürünleri doğrudan 1. sıradan başlayacak şekilde tepede kilitler!
         if f_collection_priority and selected_priority_collections and pin_collection_to_top:
             is_priority = df_sorted["member_collections"].apply(
-                lambda col_list: any(c in col_list for c in selected_priority_collections) if isinstance(col_list, list) else False
+                lambda col_list: check_in_priority_collections(col_list, selected_priority_collections)
             )
-            priority_group = df_sorted[is_priority]
-            other_group = df_sorted[~is_priority]
             
-            p_in = priority_group[priority_group["total_stock"] > 0]
-            p_out = priority_group[priority_group["total_stock"] <= 0]
-            o_in = other_group[other_group["total_stock"] > 0]
-            o_out = other_group[other_group["total_stock"] <= 0]
+            p_in = df_sorted[is_priority & (df_sorted["total_stock"] > 0)]
+            p_out = df_sorted[is_priority & (df_sorted["total_stock"] <= 0)]
+            o_in = df_sorted[~is_priority & (df_sorted["total_stock"] > 0)]
+            o_out = df_sorted[~is_priority & (df_sorted["total_stock"] <= 0)]
             
             if push_out_of_stock:
+                # 1. Sırada Seçili Koleksiyon Stokluları -> 2. Sırada Diğer Stoklular -> 3. Sırada Tükenenler
                 df_sorted = pd.concat([p_in, o_in, p_out, o_out]).reset_index(drop=True)
             else:
-                df_sorted = pd.concat([priority_group, other_group]).reset_index(drop=True)
-
-    # 1. Sayfadan T-Shirt'leri Koruma
-    if protect_page1_tshirts:
-        in_s = df_sorted[df_sorted["total_stock"] > 0]
-        out_s = df_sorted[df_sorted["total_stock"] <= 0]
-        tshirts = in_s[in_s["main_category"] == "TSHIRT_KISAKOL"]
-        non_tshirts = in_s[in_s["main_category"] != "TSHIRT_KISAKOL"]
-        page1 = non_tshirts.iloc[:24]
-        rest = non_tshirts.iloc[24:]
-        merged_rest = pd.concat([rest, tshirts]).sort_values(by="Hesaplanan Skor", ascending=False)
-        df_sorted = pd.concat([page1, merged_rest, out_s]).reset_index(drop=True)
-
-    # 4'lü Izgara & Renk Ayrıştırma & Haftalık Dinamik Rotasyon
-    if enable_clustering_fix and uploaded_backup is None:
-        seed = datetime.now().isocalendar()[1] if enable_weekly_rotation else 0
-        df_sorted = diversify_grid_4(df_sorted, lookback=4, seed_offset=seed)
+                df_sorted = pd.concat([p_in, p_out, o_in, o_out]).reset_index(drop=True)
 
     st.session_state[working_key] = df_sorted
 
@@ -1005,7 +998,7 @@ if f_stock: active_badges.append("📦 Bol Stoklular")
 if f_new: active_badges.append("✨ En Son Eklenenler")
 if f_recent_stock: active_badges.append("🔄 Stoğu En Son Güncellenenler")
 if f_collection_priority and selected_priority_collections:
-    pin_txt = " (👑 Tepeye Sabitli)" if pin_collection_to_top else ""
+    pin_txt = " (👑 Tepeye Kilitli)" if pin_collection_to_top else ""
     active_badges.append(f"🏷️ Koleksiyon: {', '.join(selected_priority_collections)}{pin_txt}")
 if f_season and selected_priority_seasons: active_badges.append(f"❄️/☀️ Sezon: {', '.join(selected_priority_seasons)}")
 if enable_fw_multi_interleaving: active_badges.append("🔄 1 FW - 1 Multi Harmanlama")
@@ -1394,18 +1387,33 @@ if view_mode == "🎨 Görsel Vitrin (Sortmax)":
     components.html(html_code, height=estimated_height, scrolling=True)
 
 else:
-    # 📋 Klasik Tablo Modu
+    # 📋 Düzenlenebilir Klasik Tablo Modu (Doğrudan Sıra Numarası Girişi)
     display_cols = [
         "Planlanan Sıra", "image", "Mevcut Sıra", "title", "sku", "color", "season", 
         "total_stock", "active_sizes", "size_status", "discount_pct", "days_old", "price"
     ]
-    st.dataframe(
-        grid_df[display_cols],
+    
+    edit_df = grid_df[display_cols].copy()
+    
+    st.info("💡 **Hızlı Sıra Değiştirme:** 'Planlanan' sütunundaki numaraya çift tıklayıp yeni sıra numarasını yazıp Enter'a basabilirsiniz. Sıralama anında tüm koleksiyonda güncellenir.")
+
+    edited_data = st.data_editor(
+        edit_df,
+        key=f"table_editor_{selected_col_id}_{filter_q}",
         use_container_width=True,
         height=650,
+        disabled=[c for c in display_cols if c != "Planlanan Sıra"],
         column_config={
+            "Planlanan Sıra": st.column_config.NumberColumn(
+                "Planlanan",
+                help="Ürünün oturmasını istediğiniz yeni sıra numarasını girin.",
+                min_value=1,
+                max_value=len(st.session_state[working_key]),
+                step=1,
+                required=True,
+                width="small"
+            ),
             "image": st.column_config.ImageColumn("Görsel", width="small"),
-            "Planlanan Sıra": st.column_config.NumberColumn("Planlanan", width="small"),
             "Mevcut Sıra": st.column_config.NumberColumn("Mevcut", width="small"),
             "title": st.column_config.TextColumn("Ürün Adı", width="large"),
             "sku": st.column_config.TextColumn("SKU"),
@@ -1419,6 +1427,31 @@ else:
             "price": st.column_config.NumberColumn("Fiyat (TL)", format="%.2f TL")
         }
     )
+
+    changed_rows = edit_df["Planlanan Sıra"] != edited_data["Planlanan Sıra"]
+    if changed_rows.any():
+        changed_indices = edit_df[changed_rows].index
+        for idx in changed_indices:
+            changed_pid = grid_df.loc[idx, "product_id"]
+            new_target_rank = int(edited_data.loc[idx, "Planlanan Sıra"])
+            
+            full_curr = st.session_state[working_key].copy().reset_index(drop=True)
+            
+            target_product = full_curr[full_curr["product_id"] == changed_pid]
+            remaining_products = full_curr[full_curr["product_id"] != changed_pid]
+            
+            insert_pos = max(0, min(new_target_rank - 1, len(remaining_products)))
+            
+            reordered_full = pd.concat([
+                remaining_products.iloc[:insert_pos],
+                target_product,
+                remaining_products.iloc[insert_pos:]
+            ]).reset_index(drop=True)
+            
+            st.session_state[working_key] = reordered_full
+            st.success(f"✅ Ürün başarıyla #{new_target_rank} sıraya taşındı!")
+            time.sleep(0.3)
+            st.rerun()
 
 # ==================== CANLIYA ALMA ====================
 st.divider()
